@@ -118,6 +118,7 @@ monoutils_sources = \
 	mono-string.h		\
 	mono-time.c  		\
 	mono-time.h  		\
+	mono-xsdk.h		\
 	strenc-internals.h 	\
 	strenc.h		\
 	strenc.c		\
@@ -174,6 +175,8 @@ monoutils_sources = \
 	mono-threads.c	\
 	mono-threads-state-machine.c	\
 	mono-threads-posix.c	\
+	mono-threads-xsdk.c	\
+	mono-xsdk.c	\
 	mono-threads-posix-signals.c	\
 	mono-threads-mach.c	\
 	mono-threads-mach-helper.c	\
@@ -355,6 +358,11 @@ libmonoutilsinclude_HEADERS = 	\
 	mono-dl-fallback.h	\
 	mono-private-unstable.h	\
 	mono-counters.h
+
+if HOST_XSDK
+# What a title calls to give P/Invoke its own functions (mono_xsdk_pinvoke_register).
+libmonoutilsinclude_HEADERS += mono-xsdk.h
+endif
 
 EXTRA_DIST = mono-errno.h mono-embed.h mono-embed.c ../../support/libm/complex.c mono-experiments.def
 

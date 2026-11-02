@@ -140,8 +140,25 @@ host_darwin=no
 host_linux=no
 build_darwin=no
 host_sunos=no
+host_xsdk=no
 
 case "$host" in
+	powerpc-xsdk-elf*)
+		CPPFLAGS="$CPPFLAGS -D_REENTRANT -DHOST_XSDK -DTARGET_XSDK -DMONO_ARCH_XSDK -DSTRERROR_R_CHAR_P"
+		libgc_threads=pthreads
+		host_xsdk=yes
+		# newlib ships pwd.h and grp.h, but the console has no users or groups to look up.
+		ac_cv_header_pwd_h=no
+		ac_cv_header_grp_h=no
+		# IKVM's JNI library has no JVM to serve on the console.
+		ikvm_native=no
+		with_sigaltstack=no
+		with_tls=pthread
+		with_sgen_default_concurrent=no
+		BTLS_SUPPORTED=no
+		RID="xsdk-ppc"
+		COREARCH="ppc"
+		;;
 	wasm32*)
 		CFLAGS="$CFLAGS -D_REENTRANT -D_GNU_SOURCE -s WASM=1"
 		CPPFLAGS="$CPPFLAGS -D_REENTRANT -DUSE_MMAP -s WASM=1"
@@ -590,6 +607,7 @@ AM_CONDITIONAL(HOST_TIZEN, test x$platform_tizen = xyes)
 AM_CONDITIONAL(HOST_IOS, test x$platform_ios = xyes)
 AM_CONDITIONAL(HOST_WASM, test x$host_wasm = xyes)
 AM_CONDITIONAL(HOST_AIX, test x$host_aix = xyes)
+AM_CONDITIONAL(HOST_XSDK, test x$host_xsdk = xyes)
 
 if test -z "$HOST_DARWIN_TRUE"; then :
 PLATFORM_AOT_SUFFIX=.dylib
@@ -1197,7 +1215,7 @@ AC_DEFINE(DISABLE_STRUCTURED_CRASH,1,[Do not create structured crash files durin
 fi
 
 case "$host" in
-	*-mingw*|*-*-cygwin*)
+	powerpc-xsdk-elf*|*-mingw*|*-*-cygwin*)
 		crash_reporting=no
 		;;
 esac
@@ -3002,6 +3020,7 @@ if test x$host_win32 = xno; then
 	dnl ********************************
 	dnl *** Checks for timezone stuff **
 	dnl ********************************
+	if test x$host_xsdk = xno; then
 	AC_CACHE_CHECK(for tm_gmtoff in struct tm, ac_cv_struct_tm_gmtoff,
 		AC_TRY_COMPILE([
 			#include <time.h>
@@ -3023,6 +3042,7 @@ if test x$host_win32 = xno; then
 		else
 			AC_ERROR(unable to find a way to determine timezone)
 		fi
+	fi
 	fi
 
 	dnl *********************************
@@ -4554,7 +4574,7 @@ case "$host" in
 				;;
 		esac
 		;;
-	macppc-*-openbsd* | powerpc*-*-linux* | powerpc-*-openbsd* | \
+	powerpc-xsdk-elf* | macppc-*-openbsd* | powerpc*-*-linux* | powerpc-*-openbsd* | \
         powerpc-*-sysv* | powerpc-*-darwin* | powerpc-*-netbsd* | \
         powerpc*-*-freebsd* | powerpc*-*-aix* | powerpc*-*-os400* )
 		if test "x$ac_cv_sizeof_void_p" = "x8"; then
@@ -5201,6 +5221,12 @@ AC_SUBST(BREAKPOINT)
 AC_C_BIGENDIAN([ORDER=G_BIG_ENDIAN],[ORDER=G_LITTLE_ENDIAN])
 
 case $host in
+powerpc-xsdk-elf*)
+    PATHSEP='/'
+    SEARCHSEP=';'
+    OS="UNIX"
+    PIDTYPE='int'
+    ;;
 *-*-msdos* | *-*-go32* | *-*-mingw32* | *-*-cygwin* | *-*-windows*)
     PATHSEP='\\'
     SEARCHSEP=';'
@@ -6396,8 +6422,15 @@ if test "x$support_boehm" = "xyes" -a "x$libgc" = "xincluded"; then
 	mono_subdirs_libgc=external/bdwgc
 fi
 
-if test x$enable_support_build != xno; then
+# xsdk builds the runtime alone: support is MonoPosixHelper, which needs a POSIX host.
+if test x$enable_support_build != xno -a x$host_xsdk = xno; then
 	mono_subdirs_support=support
+fi
+
+# The compiler's translations, which need gettext's tools: only with NLS (--enable-nls=no, or no msgfmt, leaves them
+# out), and not for the console.
+if test x$host_xsdk = xno -a "x$USE_NLS" = xyes; then
+	mono_subdirs_po=po
 fi
 
 if test x$cross_compiling = xno; then
@@ -6413,7 +6446,7 @@ if test x$with_ikvm_native = xyes; then
 	mono_subdirs_ikvm_native=ikvm-native
 fi
 
-MONO_SUBDIRS="po $mono_subdirs_libgc llvm mono $mono_subdirs_ikvm_native $mono_subdirs_support data runtime scripts man samples $mono_subdirs_tools $mono_subdirs_docs msvc acceptance-tests"
+MONO_SUBDIRS="$mono_subdirs_po $mono_subdirs_libgc llvm mono $mono_subdirs_ikvm_native $mono_subdirs_support data runtime scripts man samples $mono_subdirs_tools $mono_subdirs_docs msvc acceptance-tests"
 MONO_NOINST_SUBDIRS="$mono_subdirs_libgc"
 
 AC_SUBST(MONO_SUBDIRS)
@@ -6458,6 +6491,22 @@ AC_MSG_CHECKING([Mono.Native support])
 sed_version_pattern='[[0-9]]\{1,2\}\(\.[[0-9]]\{1,2\}\)'
 if test x$disable_mono_native = xyes; then
 	mono_native=no
+elif test x$host_xsdk = xyes; then
+	MONO_NATIVE_CC=$CC
+	MONO_NATIVE_CXX=$CXX
+	MONO_NATIVE_CCASFLAGS=$CCASFLAGS
+	# getline needs GNU's names; mono/native/xsdk holds empty stand-ins for headers newlib lacks.
+	MONO_NATIVE_CPPFLAGS="$CPPFLAGS -D_GNU_SOURCE -I\$(top_srcdir)/mono/native/xsdk"
+	MONO_NATIVE_CXXFLAGS=$CXXFLAGS
+	MONO_NATIVE_CFLAGS=$CFLAGS
+	MONO_NATIVE_LDFLAGS=$LDFLAGS
+
+	mono_native=yes
+	mono_native_compat=no
+	mono_native_text="xsdk"
+	MONO_NATIVE_PLATFORM=xsdk
+	# The class libraries are built for Linux (mcs/build/config.make's HOST_PLATFORM).
+	MONO_NATIVE_PLATFORM_TYPE="MONO_NATIVE_PLATFORM_TYPE_LINUX"
 elif test x$target_osx = xyes; then
 	MONO_NATIVE_CC=$CC
 	MONO_NATIVE_CXX=$CXX
@@ -6757,6 +6806,7 @@ AM_CONDITIONAL(MONO_NATIVE_PLATFORM_ANDROID, test x$MONO_NATIVE_PLATFORM = xandr
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_FREEBSD, test x$MONO_NATIVE_PLATFORM = xfreebsd)
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_NETBSD, test x$MONO_NATIVE_PLATFORM = xnetbsd)
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_HAIKU, test x$MONO_NATIVE_PLATFORM = xhaiku)
+AM_CONDITIONAL(MONO_NATIVE_PLATFORM_XSDK, test x$MONO_NATIVE_PLATFORM = xxsdk)
 
 MONO_NATIVE_PLATFORM_TYPE_COMPAT="$MONO_NATIVE_PLATFORM_TYPE | MONO_NATIVE_PLATFORM_TYPE_COMPAT"
 MONO_NATIVE_PLATFORM_TYPE_UNIFIED="$MONO_NATIVE_PLATFORM_TYPE | MONO_NATIVE_PLATFORM_TYPE_UNIFIED"
@@ -6868,7 +6918,9 @@ AC_SUBST(CCLDFLAGS)
 AC_SUBST(ZLIB_CFLAGS)
 
 # Update all submodules recursively to ensure everything is checked out
-(cd $srcdir && scripts/update_submodules.sh)
+if test x$host_xsdk = xno; then
+	(cd $srcdir && scripts/update_submodules.sh)
+fi
 
 AC_MONO_OUTPUT()
 

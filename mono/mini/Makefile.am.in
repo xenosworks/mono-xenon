@@ -365,7 +365,8 @@ ppc_sources = \
 	mini-ppc.c		\
 	mini-ppc.h		\
 	exceptions-ppc.c	\
-	tramp-ppc.c
+	tramp-ppc.c		\
+	mini-xsdk.c
 
 arm_sources = \
 	mini-arm.c		\
@@ -419,7 +420,8 @@ windows_sources = \
 	mini-windows-dlldac.c
 
 posix_sources = \
-	mini-posix.c
+	mini-posix.c \
+	mini-xsdk.c
 
 if ENABLE_LLVM
 llvm_sources = \
@@ -772,6 +774,10 @@ libmonosgen_2_0_la_SOURCES =
 libmonosgen_2_0_la_CFLAGS = $(mono_sgen_CFLAGS) @CXX_ADD_CFLAGS@
 
 libmonosgen_2_0_la_LIBADD = libmini.la $(interp_libs_with_mini) $(dbg_libs_with_mini) $(sgen_libs) $(LIBMONO_DTRACE_OBJECT) $(LLVMMONOF)
+if HOST_XSDK
+# System.Native, which P/Invoke reaches through mono-xsdk.c's table as the console has no dlopen.
+libmonosgen_2_0_la_LIBADD += ../native/libmono-native.la
+endif
 libmonosgen_2_0_la_LDFLAGS = $(libmonoldflags) $(monobin_platform_ldflags) $(CCLDFLAGS)
 libmonosgen_2_0_la_LIBTOOLFLAGS = $(MONO_LIBTOOL_TAG)
 
