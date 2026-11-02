@@ -1,0 +1,112 @@
+.macro LOAD64 reg, hi, mid, low, last
+	lis \reg, \hi
+	ori \reg, \reg, \mid
+	sldi \reg, \reg, 32
+	oris \reg, \reg, \low
+	ori \reg, \reg, \last
+.endm
+
+.macro CHECK64 reg, hi, mid, low, last
+	LOAD64 r0, \hi, \mid, \low, \last
+	cmpd r0, \reg
+	bne unwind64_fail
+.endm
+
+.section .text
+.global mono_abi_unwind64
+.type mono_abi_unwind64, @function
+mono_abi_unwind64:
+	mflr r0
+	stw r0, 4(r1)
+	stwu r1, -240(r1)
+	stw r3, 80(r1)
+	std r14, 96(r1)
+	std r15, 104(r1)
+	std r16, 112(r1)
+	std r17, 120(r1)
+	std r18, 128(r1)
+	std r19, 136(r1)
+	std r20, 144(r1)
+	std r21, 152(r1)
+	std r22, 160(r1)
+	std r23, 168(r1)
+	std r24, 176(r1)
+	std r25, 184(r1)
+	std r26, 192(r1)
+	std r27, 200(r1)
+	std r28, 208(r1)
+	std r29, 216(r1)
+	std r30, 224(r1)
+	std r31, 232(r1)
+
+	LOAD64 r14, 0x1111, 0x1111, 0x1111, 0x1111
+	LOAD64 r15, 0x2222, 0x2222, 0x2222, 0x2222
+	LOAD64 r16, 0x3333, 0x3333, 0x3333, 0x3333
+	LOAD64 r17, 0x4444, 0x4444, 0x4444, 0x4444
+	LOAD64 r18, 0x5555, 0x5555, 0x5555, 0x5555
+	LOAD64 r19, 0x6666, 0x6666, 0x6666, 0x6666
+	LOAD64 r20, 0x7777, 0x7777, 0x7777, 0x7777
+	LOAD64 r21, 0x8888, 0x8888, 0x8888, 0x8888
+	LOAD64 r22, 0x9999, 0x9999, 0x9999, 0x9999
+	LOAD64 r23, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA
+	LOAD64 r24, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB
+	LOAD64 r25, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC
+	LOAD64 r26, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD
+	LOAD64 r27, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE
+	LOAD64 r28, 0xF0F0, 0xF0F0, 0xF0F0, 0xF0F0
+	LOAD64 r29, 0x0123, 0x4567, 0x89AB, 0xCDEF
+	LOAD64 r30, 0xFEDC, 0xBA98, 0x7654, 0x3210
+	LOAD64 r31, 0x8000, 0x0000, 0x0000, 0x0001
+
+	lwz r12, 80(r1)
+	mtctr r12
+	bctrl
+	li r3, 0
+
+	CHECK64 r14, 0x1111, 0x1111, 0x1111, 0x1111
+	CHECK64 r15, 0x2222, 0x2222, 0x2222, 0x2222
+	CHECK64 r16, 0x3333, 0x3333, 0x3333, 0x3333
+	CHECK64 r17, 0x4444, 0x4444, 0x4444, 0x4444
+	CHECK64 r18, 0x5555, 0x5555, 0x5555, 0x5555
+	CHECK64 r19, 0x6666, 0x6666, 0x6666, 0x6666
+	CHECK64 r20, 0x7777, 0x7777, 0x7777, 0x7777
+	CHECK64 r21, 0x8888, 0x8888, 0x8888, 0x8888
+	CHECK64 r22, 0x9999, 0x9999, 0x9999, 0x9999
+	CHECK64 r23, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA
+	CHECK64 r24, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB
+	CHECK64 r25, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC
+	CHECK64 r26, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD
+	CHECK64 r27, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE
+	CHECK64 r28, 0xF0F0, 0xF0F0, 0xF0F0, 0xF0F0
+	CHECK64 r29, 0x0123, 0x4567, 0x89AB, 0xCDEF
+	CHECK64 r30, 0xFEDC, 0xBA98, 0x7654, 0x3210
+	CHECK64 r31, 0x8000, 0x0000, 0x0000, 0x0001
+	b unwind64_end
+
+unwind64_fail:
+	li r3, 1
+
+unwind64_end:
+	ld r14, 96(r1)
+	ld r15, 104(r1)
+	ld r16, 112(r1)
+	ld r17, 120(r1)
+	ld r18, 128(r1)
+	ld r19, 136(r1)
+	ld r20, 144(r1)
+	ld r21, 152(r1)
+	ld r22, 160(r1)
+	ld r23, 168(r1)
+	ld r24, 176(r1)
+	ld r25, 184(r1)
+	ld r26, 192(r1)
+	ld r27, 200(r1)
+	ld r28, 208(r1)
+	ld r29, 216(r1)
+	ld r30, 224(r1)
+	ld r31, 232(r1)
+	addi r1, r1, 240
+	lwz r0, 4(r1)
+	mtlr r0
+	blr
+.size mono_abi_unwind64, .-mono_abi_unwind64
