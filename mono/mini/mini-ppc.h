@@ -20,11 +20,27 @@
 #define MONO_MAX_IREGS 32
 #define MONO_MAX_FREGS 32
 
+#ifdef MONO_ARCH_XSDK
+#define MONO_SAVED_GREGS 18
+#define MONO_PPC_FIRST_SAVED_GREG ppc_r14
+#else
 #define MONO_SAVED_GREGS 19
-#define MONO_SAVED_FREGS 18
-
 #define MONO_PPC_FIRST_SAVED_GREG ppc_r13
+#endif
+#define MONO_SAVED_FREGS 18
 #define MONO_PPC_FIRST_SAVED_FREG ppc_f14
+
+#ifdef MONO_ARCH_XSDK
+#define MONO_PPC_SAVED_REG_SIZE 8
+#define MONO_PPC_UNWIND_REG_OFFSET(o) ((o) + 4)
+#define mono_ppc_save_reg(c,s,d,a) ppc_std (c, s, d, a)
+#define mono_ppc_restore_reg(c,s,d,a) ppc_ld (c, s, d, a)
+#else
+#define MONO_PPC_SAVED_REG_SIZE sizeof (target_mgreg_t)
+#define MONO_PPC_UNWIND_REG_OFFSET(o) (o)
+#define mono_ppc_save_reg(c,s,d,a) ppc_str (c, s, d, a)
+#define mono_ppc_restore_reg(c,s,d,a) ppc_ldr (c, s, d, a)
+#endif
 
 #define MONO_ARCH_FRAME_ALIGNMENT 16
 
@@ -52,13 +68,14 @@ struct MonoLMF {
 	gulong     eip;
 	/* Add a dummy field to force iregs to be aligned when cross compiling from x86 */
 	gulong     dummy;
-	host_mgreg_t iregs [MONO_SAVED_GREGS]; /* 13..31 */
+	MonoPPCContextReg iregs [MONO_SAVED_GREGS];
 	gdouble    fregs [MONO_SAVED_FREGS]; /* 14..31 */
 };
 
 
 typedef struct MonoCompileArch {
 	int fp_conv_var_offset;
+	MonoInst *vret_addr_loc;
 	guint8 *thunks;
 	int thunks_size;
 } MonoCompileArch;
@@ -111,9 +128,13 @@ typedef struct MonoCompileArch {
 
 /* Parameters used by the register allocator */
 #define MONO_ARCH_CALLEE_REGS ((0xff << ppc_r3) | (1 << ppc_r12) | (1 << ppc_r11))
+#ifdef MONO_ARCH_XSDK
+#define MONO_ARCH_CALLEE_SAVED_REGS (0x3ffff << ppc_r14) /* ppc_r14 - ppc_r31 */
+#else
 #define MONO_ARCH_CALLEE_SAVED_REGS (0xfffff << ppc_r13) /* ppc_13 - ppc_31 */
+#endif
 
-#if defined(__APPLE__) || defined(__mono_ppc64__)
+#if defined(__APPLE__) || defined(__mono_ppc64__) || defined(MONO_ARCH_XSDK)
 #define MONO_ARCH_CALLEE_FREGS (0x1fff << ppc_f1)
 #else
 #define MONO_ARCH_CALLEE_FREGS (0xff << ppc_f1)
@@ -140,7 +161,24 @@ typedef struct MonoCompileArch {
 #define MONO_ARCH_INST_IS_FLOAT(desc) ((desc == 'f') || (desc == 'g'))
 
 /* deal with some of the ABI differences here */
-#ifdef __APPLE__
+#ifdef MONO_ARCH_XSDK
+#define PPC_RET_ADDR_OFFSET 4
+#define PPC_STACK_PARAM_OFFSET 8
+#define PPC_MINIMAL_STACK_SIZE 80
+#define PPC_MINIMAL_PARAM_AREA_SIZE 64
+#define PPC_LARGEST_STRUCT_SIZE_TO_RETURN_VIA_REGISTERS 0
+#define PPC_MOST_FLOAT_STRUCT_MEMBERS_TO_RETURN_VIA_REGISTERS 0
+#define PPC_FIRST_ARG_REG ppc_r3
+#define PPC_LAST_ARG_REG ppc_r10
+#define PPC_FIRST_FPARG_REG ppc_f1
+#define PPC_LAST_FPARG_REG ppc_f8
+#define PPC_PASS_STRUCTS_BY_VALUE 0
+#define PPC_PASS_SMALL_FLOAT_STRUCTS_IN_FR_REGS 0
+#define PPC_RETURN_SMALL_FLOAT_STRUCTS_IN_FR_REGS 0
+#define PPC_RETURN_SMALL_STRUCTS_IN_REGS 0
+#define XSDK_STACK_PARAM_OFFSET 80
+#define XSDK_LAST_FPARG_REG ppc_f13
+#elif defined(__APPLE__)
 #define PPC_RET_ADDR_OFFSET 8
 #define PPC_STACK_PARAM_OFFSET 24
 #define PPC_MINIMAL_STACK_SIZE 24
@@ -242,7 +280,9 @@ typedef struct MonoCompileArch {
 #define MONO_ARCH_VTABLE_REG	ppc_r11
 #define MONO_ARCH_RGCTX_REG	MONO_ARCH_IMT_REG
 
+#ifndef MONO_ARCH_XSDK
 #define MONO_ARCH_HAVE_SETUP_RESUME_FROM_SIGNAL_HANDLER_CTX 1
+#endif
 
 #define MONO_ARCH_NO_IOV_CHECK 1
 #define MONO_ARCH_HAVE_DECOMPOSE_OPTS 1
@@ -266,12 +306,8 @@ typedef struct MonoCompileArch {
 // can pass context to generics or interfaces?
 #define MONO_ARCH_HAVE_VOLATILE_NON_PARAM_REGISTER 0 // FIXME?
 
-#if defined(_AIX)
-/*
- * HACK: AIX always allows accessing page 0! We can't rely on SIGSEGV
- * to save us when a null dereference in managed code occurs, so we
- * always have to check for null.
- */
+#if defined(_AIX) || defined(MONO_ARCH_XSDK)
+/* These targets cannot rely on SIGSEGV for managed null dereferences. */
 #define MONO_ARCH_EXPLICIT_NULL_CHECKS 1
 #endif
 
@@ -322,12 +358,23 @@ typedef struct {
 	} while (0)
 
 #else
+#ifndef MONO_ARCH_XSDK
 #define MONO_INIT_CONTEXT_FROM_FUNC(ctx,start_func) do {	\
 		gpointer r1;					\
 		__asm__ volatile("mr   %0,1" : "=r" (r1));	\
 		MONO_CONTEXT_SET_BP ((ctx), r1);		\
 		MONO_CONTEXT_SET_IP ((ctx), (start_func));	\
 	} while (0)
+
+#else
+#define MONO_INIT_CONTEXT_FROM_FUNC(ctx,start_func) do {	\
+		gpointer r1;					\
+		MONO_CONTEXT_GET_CURRENT (*(ctx));		\
+		__asm__ volatile("mr   %0,1" : "=r" (r1));	\
+		MONO_CONTEXT_SET_BP ((ctx), r1);		\
+		MONO_CONTEXT_SET_IP ((ctx), (start_func));	\
+	} while (0)
+#endif
 
 #endif
 #endif
@@ -365,7 +412,7 @@ extern guint8* mono_ppc_create_pre_code_ftnptr (guint8 *code);
 #define MONO_ARCH_USE_SIGACTION 1
 #elif defined (_AIX)
 #define MONO_ARCH_USE_SIGACTION 1
-#elif defined(MONO_CROSS_COMPILE)
+#elif defined(MONO_CROSS_COMPILE) || defined(MONO_ARCH_XSDK)
 	typedef MonoContext ucontext_t;
 /*	typedef struct {
 		int dummy;
@@ -385,7 +432,7 @@ void
 mono_ppc_patch (guchar *code, const guchar *target);
 
 void
-mono_ppc_throw_exception (MonoObject *exc, unsigned long eip, unsigned long esp, host_mgreg_t *int_regs, gdouble *fp_regs, gboolean rethrow, gboolean preserve_ips);
+mono_ppc_throw_exception (MonoObject *exc, unsigned long eip, unsigned long esp, MonoPPCContextReg *int_regs, gdouble *fp_regs, gboolean rethrow, gboolean preserve_ips);
 
 #ifdef __mono_ppc64__
 #define MONO_PPC_32_64_CASE(c32,c64)	c64

@@ -180,6 +180,10 @@ mini_emit_call_args (MonoCompile *cfg, MonoMethodSignature *sig,
 	call->args = args;
 	call->signature = sig;
 	call->rgctx_reg = rgctx;
+#ifdef MONO_ARCH_XSDK
+	/* mono_arch_emit_call lays a call to a method out as managed, whatever its signature (mini-ppc.c). */
+	call->method = target;
+#endif
 	sig_ret = mini_get_underlying_type (sig->ret);
 
 	mini_type_to_eval_stack_type ((cfg), sig_ret, &call->inst);

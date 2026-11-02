@@ -3732,6 +3732,9 @@ mono_thread_state_init (MonoThreadUnwindState *ctx)
 	ctx->valid = FALSE; //A cross compiler doesn't need to suspend.
 #elif MONO_ARCH_HAS_MONO_CONTEXT
 	MONO_CONTEXT_GET_CURRENT (ctx->ctx);
+#ifdef MONO_ARCH_XSDK
+	MONO_CONTEXT_SET_IP (&ctx->ctx, mono_thread_state_init);
+#endif
 #else
 	g_error ("Use a null sigctx requires a working mono-context");
 #endif

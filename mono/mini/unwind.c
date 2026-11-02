@@ -15,6 +15,7 @@
 #include <mono/utils/freebsd-dwarf.h>
 #include <mono/utils/hazard-pointer.h>
 #include <mono/utils/mono-logger-internals.h>
+#include <mono/utils/mono-threads.h>
 #include <mono/metadata/threads-types.h>
 #include <mono/metadata/mono-endian.h>
 
@@ -710,6 +711,25 @@ mono_unwind_frame (guint8 *unwind_info, guint32 unwind_info_len,
 		return FALSE;
 	}
 	cfa_val = (guint8*)regs [mono_dwarf_reg_to_hw_reg (cfa_reg)] + cfa_offset;
+#ifdef MONO_ARCH_XSDK
+	{
+		guint8 *stack_limit;
+		size_t stack_size;
+		gsize cfa_addr = (gsize)cfa_val;
+
+		mono_thread_info_get_stack_bounds (&stack_limit, &stack_size);
+		if (cfa_addr < 0x10000 || cfa_addr < (gsize)stack_limit || cfa_addr >= (gsize)stack_limit + stack_size) {
+			char *method_name = mono_get_method_from_ip (ip);
+
+			mono_runtime_printf_err ("xsdk unwind: invalid CFA ip=%p method=%s cfa=%p stack=%p-%p cfa_reg=%d cfa_offset=%d regs[cfa]=%p sp=%p r31=%p lr=%p",
+				ip, method_name ? method_name : "<none>", cfa_val, stack_limit, stack_limit + stack_size,
+				cfa_reg, cfa_offset, (gpointer)(gsize)regs [mono_dwarf_reg_to_hw_reg (cfa_reg)],
+				(gpointer)(gsize)regs [ppc_sp], (gpointer)(gsize)regs [31], (gpointer)(gsize)regs [ppc_lr]);
+			g_free (method_name);
+			return FALSE;
+		}
+	}
+#endif
 	for (hwreg = 0; hwreg < NUM_HW_REGS; ++hwreg) {
 		if (reg_saved [hwreg] && locations [hwreg].loc_type == LOC_OFFSET) {
 			int dwarfreg = mono_hw_reg_to_dwarf_reg (hwreg);

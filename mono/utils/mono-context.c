@@ -591,7 +591,7 @@ mono_monoctx_to_sigctx (MonoContext *mctx, void *sigctx)
 	}
 }
 
-#elif (((defined(__ppc__) || defined(__powerpc__) || defined(__ppc64__)) && !defined(MONO_CROSS_COMPILE))) || (defined(TARGET_POWERPC))
+#elif (((defined(__ppc__) || defined(__powerpc__) || defined(__ppc64__)) && !defined(MONO_CROSS_COMPILE) && !defined(TARGET_XSDK)) || (defined(TARGET_POWERPC) && !defined(TARGET_XSDK)))
 
 #include <mono/utils/mono-context.h>
 #include <mono/mini/mini-ppc.h>
@@ -619,6 +619,22 @@ mono_monoctx_to_sigctx (MonoContext *mctx, void *sigctx)
 	/* The valid values for pc and sp are stored here and not in regs array */
 	UCONTEXT_REG_NIP(uc) = mctx->sc_ir;
 	UCONTEXT_REG_Rn(uc, 1) = mctx->sc_sp;
+}
+
+#elif defined(TARGET_XSDK)
+
+#include <mono/utils/mono-context.h>
+
+void
+mono_sigctx_to_monoctx (void *sigctx, MonoContext *mctx)
+{
+	g_error ("Signal contexts are not supported on xsdk");
+}
+
+void
+mono_monoctx_to_sigctx (MonoContext *mctx, void *sigctx)
+{
+	g_error ("Signal contexts are not supported on xsdk");
 }
 
 #elif defined (TARGET_WASM)

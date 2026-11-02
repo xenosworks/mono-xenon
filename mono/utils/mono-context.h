@@ -676,10 +676,22 @@ typedef struct {
 
 #else /* !defined(__mono_ppc64__) */
 
+#ifdef MONO_ARCH_XSDK
+typedef guint64 MonoPPCContextReg;
+#define MONO_PPC_CONTEXT_STORE_GPR "std"
+#define MONO_PPC_CONTEXT_GPR_STRIDE "8"
+#define MONO_PPC_CONTEXT_FREG_BASE "8*32+8"
+#else
+typedef host_mgreg_t MonoPPCContextReg;
+#define MONO_PPC_CONTEXT_STORE_GPR "stw"
+#define MONO_PPC_CONTEXT_GPR_STRIDE "4"
+#define MONO_PPC_CONTEXT_FREG_BASE "4*32+8"
+#endif
+
 typedef struct {
 	host_mgreg_t sc_ir;          // pc
 	host_mgreg_t sc_sp;          // r1
-	host_mgreg_t regs [32];
+	MonoPPCContextReg regs [32];
 	double fregs [32];
 } MonoContext;
 
@@ -697,70 +709,70 @@ typedef struct {
 	__asm__ __volatile__(	\
 		"stw 0, 0(%0)\n"	\
 		"stw 1, 4(%0)\n"	\
-		"stw 0, 4*0+8(%0)\n"	\
-		"stw 1, 4*1+8(%0)\n"	\
-		"stw 2, 4*2+8(%0)\n"	\
-		"stw 3, 4*3+8(%0)\n"	\
-		"stw 4, 4*4+8(%0)\n"	\
-		"stw 5, 4*5+8(%0)\n"	\
-		"stw 6, 4*6+8(%0)\n"	\
-		"stw 7, 4*7+8(%0)\n"	\
-		"stw 8, 4*8+8(%0)\n"	\
-		"stw 9, 4*9+8(%0)\n"	\
-		"stw 10, 4*10+8(%0)\n"	\
-		"stw 11, 4*11+8(%0)\n"	\
-		"stw 12, 4*12+8(%0)\n"	\
-		"stw 13, 4*13+8(%0)\n"	\
-		"stw 14, 4*14+8(%0)\n"	\
-		"stw 15, 4*15+8(%0)\n"	\
-		"stw 16, 4*16+8(%0)\n"	\
-		"stw 17, 4*17+8(%0)\n"	\
-		"stw 18, 4*18+8(%0)\n"	\
-		"stw 19, 4*19+8(%0)\n"	\
-		"stw 20, 4*20+8(%0)\n"	\
-		"stw 21, 4*21+8(%0)\n"	\
-		"stw 22, 4*22+8(%0)\n"	\
-		"stw 23, 4*23+8(%0)\n"	\
-		"stw 24, 4*24+8(%0)\n"	\
-		"stw 25, 4*25+8(%0)\n"	\
-		"stw 26, 4*26+8(%0)\n"	\
-		"stw 27, 4*27+8(%0)\n"	\
-		"stw 28, 4*28+8(%0)\n"	\
-		"stw 29, 4*29+8(%0)\n"	\
-		"stw 30, 4*30+8(%0)\n"	\
-		"stw 31, 4*31+8(%0)\n"	\
-		"stfd 0, 8*0+4*32+8(%0)\n"	\
-		"stfd 1, 8*1+4*32+8(%0)\n"	\
-		"stfd 2, 8*2+4*32+8(%0)\n"	\
-		"stfd 3, 8*3+4*32+8(%0)\n"	\
-		"stfd 4, 8*4+4*32+8(%0)\n"	\
-		"stfd 5, 8*5+4*32+8(%0)\n"	\
-		"stfd 6, 8*6+4*32+8(%0)\n"	\
-		"stfd 7, 8*7+4*32+8(%0)\n"	\
-		"stfd 8, 8*8+4*32+8(%0)\n"	\
-		"stfd 9, 8*9+4*32+8(%0)\n"	\
-		"stfd 10, 8*10+4*32+8(%0)\n"	\
-		"stfd 11, 8*11+4*32+8(%0)\n"	\
-		"stfd 12, 8*12+4*32+8(%0)\n"	\
-		"stfd 13, 8*13+4*32+8(%0)\n"	\
-		"stfd 14, 8*14+4*32+8(%0)\n"	\
-		"stfd 15, 8*15+4*32+8(%0)\n"	\
-		"stfd 16, 8*16+4*32+8(%0)\n"	\
-		"stfd 17, 8*17+4*32+8(%0)\n"	\
-		"stfd 18, 8*18+4*32+8(%0)\n"	\
-		"stfd 19, 8*19+4*32+8(%0)\n"	\
-		"stfd 20, 8*20+4*32+8(%0)\n"	\
-		"stfd 21, 8*21+4*32+8(%0)\n"	\
-		"stfd 22, 8*22+4*32+8(%0)\n"	\
-		"stfd 23, 8*23+4*32+8(%0)\n"	\
-		"stfd 24, 8*24+4*32+8(%0)\n"	\
-		"stfd 25, 8*25+4*32+8(%0)\n"	\
-		"stfd 26, 8*26+4*32+8(%0)\n"	\
-		"stfd 27, 8*27+4*32+8(%0)\n"	\
-		"stfd 28, 8*28+4*32+8(%0)\n"	\
-		"stfd 29, 8*29+4*32+8(%0)\n"	\
-		"stfd 30, 8*30+4*32+8(%0)\n"	\
-		"stfd 31, 8*31+4*32+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 0, " MONO_PPC_CONTEXT_GPR_STRIDE "*0+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 1, " MONO_PPC_CONTEXT_GPR_STRIDE "*1+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 2, " MONO_PPC_CONTEXT_GPR_STRIDE "*2+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 3, " MONO_PPC_CONTEXT_GPR_STRIDE "*3+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 4, " MONO_PPC_CONTEXT_GPR_STRIDE "*4+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 5, " MONO_PPC_CONTEXT_GPR_STRIDE "*5+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 6, " MONO_PPC_CONTEXT_GPR_STRIDE "*6+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 7, " MONO_PPC_CONTEXT_GPR_STRIDE "*7+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 8, " MONO_PPC_CONTEXT_GPR_STRIDE "*8+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 9, " MONO_PPC_CONTEXT_GPR_STRIDE "*9+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 10, " MONO_PPC_CONTEXT_GPR_STRIDE "*10+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 11, " MONO_PPC_CONTEXT_GPR_STRIDE "*11+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 12, " MONO_PPC_CONTEXT_GPR_STRIDE "*12+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 13, " MONO_PPC_CONTEXT_GPR_STRIDE "*13+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 14, " MONO_PPC_CONTEXT_GPR_STRIDE "*14+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 15, " MONO_PPC_CONTEXT_GPR_STRIDE "*15+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 16, " MONO_PPC_CONTEXT_GPR_STRIDE "*16+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 17, " MONO_PPC_CONTEXT_GPR_STRIDE "*17+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 18, " MONO_PPC_CONTEXT_GPR_STRIDE "*18+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 19, " MONO_PPC_CONTEXT_GPR_STRIDE "*19+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 20, " MONO_PPC_CONTEXT_GPR_STRIDE "*20+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 21, " MONO_PPC_CONTEXT_GPR_STRIDE "*21+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 22, " MONO_PPC_CONTEXT_GPR_STRIDE "*22+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 23, " MONO_PPC_CONTEXT_GPR_STRIDE "*23+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 24, " MONO_PPC_CONTEXT_GPR_STRIDE "*24+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 25, " MONO_PPC_CONTEXT_GPR_STRIDE "*25+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 26, " MONO_PPC_CONTEXT_GPR_STRIDE "*26+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 27, " MONO_PPC_CONTEXT_GPR_STRIDE "*27+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 28, " MONO_PPC_CONTEXT_GPR_STRIDE "*28+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 29, " MONO_PPC_CONTEXT_GPR_STRIDE "*29+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 30, " MONO_PPC_CONTEXT_GPR_STRIDE "*30+8(%0)\n"	\
+		MONO_PPC_CONTEXT_STORE_GPR " 31, " MONO_PPC_CONTEXT_GPR_STRIDE "*31+8(%0)\n"	\
+		"stfd 0, 8*0+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 1, 8*1+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 2, 8*2+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 3, 8*3+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 4, 8*4+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 5, 8*5+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 6, 8*6+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 7, 8*7+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 8, 8*8+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 9, 8*9+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 10, 8*10+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 11, 8*11+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 12, 8*12+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 13, 8*13+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 14, 8*14+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 15, 8*15+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 16, 8*16+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 17, 8*17+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 18, 8*18+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 19, 8*19+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 20, 8*20+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 21, 8*21+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 22, 8*22+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 23, 8*23+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 24, 8*24+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 25, 8*25+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 26, 8*26+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 27, 8*27+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 28, 8*28+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 29, 8*29+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 30, 8*30+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
+		"stfd 31, 8*31+" MONO_PPC_CONTEXT_FREG_BASE "(%0)\n"	\
 		: : "r" (&(ctx))	\
 		: "memory", "r0"	\
 	)

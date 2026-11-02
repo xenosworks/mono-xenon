@@ -5916,6 +5916,20 @@ emit_setret (MonoCompile *cfg, MonoInst *val)
 	if (mini_type_to_stind (cfg, ret_type) == CEE_STOBJ) {
 		MonoInst *ret_addr;
 
+#ifdef MONO_ARCH_XSDK
+		int native_size = cfg->vret_addr && mono_arch_xsdk_native_method (cfg->method) ?
+			mono_class_native_size (mono_class_from_mono_type_internal (ret_type), NULL) : 0;
+
+		/* A native method returns a struct of 1, 2, 4 or 8 bytes in r3, loaded by OP_XSDK_SETRET (mini-ppc.c). */
+		if (native_size == 1 || native_size == 2 || native_size == 4 || native_size == 8) {
+			EMIT_NEW_VARLOADA_VREG (cfg, ret_addr, val->dreg, ret_type);
+			MONO_INST_NEW (cfg, ins, OP_XSDK_SETRET);
+			ins->dreg = ppc_r3;
+			ins->sreg1 = ret_addr->dreg;
+			ins->inst_c0 = native_size;
+			MONO_ADD_INS (cfg->cbb, ins);
+		} else
+#endif
 		if (!cfg->vret_addr) {
 			EMIT_NEW_VARSTORE (cfg, ins, cfg->ret, ret_type, val);
 		} else {

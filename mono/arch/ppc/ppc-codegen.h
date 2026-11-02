@@ -980,6 +980,18 @@ my and Ximian's copyright to this code. ;)
 #else
 /* Always true for 32-bit */
 #define ppc_is_imm32(val) (1)
+#ifdef MONO_ARCH_XSDK
+#define ppc_ld(c,D,ds,A) ppc_emit32(c, (58 << 26) | ((D) << 21) | ((A) << 16) | ((guint32)(ds) & 0xfffc) | 0)
+#define ppc_std(c,S,ds,A) ppc_emit32(c, (62 << 26) | ((S) << 21) | ((A) << 16) | ((guint32)(ds) & 0xfffc) | 0)
+#define ppc_ldx(c,D,A,B) ppc_emit32(c, (31 << 26) | ((D) << 21) | ((A) << 16) | ((B) << 11) | (21 << 1))
+#define ppc_stdx(c,S,A,B) ppc_emit32(c, (31 << 26) | ((S) << 21) | ((A) << 16) | ((B) << 11) | (149 << 1))
+#define ppc_rldicl(c,A,S,SH,MB) ppc_emit32(c, (30 << 26) | ((S) << 21) | ((A) << 16) | (ppc_split_5_1_5(SH) << 11) | (ppc_split_5_1(MB) << 5) | (ppc_split_5_1_1(SH) << 1))
+#define ppc_rldicr(c,A,S,SH,ME) ppc_emit32(c, (30 << 26) | ((S) << 21) | ((A) << 16) | (ppc_split_5_1_5(SH) << 11) | (ppc_split_5_1(ME) << 5) | (1 << 2) | (ppc_split_5_1_1(SH) << 1))
+#define ppc_rldimi(c,A,S,SH,MB) ppc_emit32(c, (30 << 26) | ((S) << 21) | ((A) << 16) | (ppc_split_5_1_5(SH) << 11) | (ppc_split_5_1(MB) << 5) | (3 << 2) | (ppc_split_5_1_1(SH) << 1))
+#define ppc_srdi(c,A,S,n) ppc_rldicl(c,A,S,64-(n),n)
+#define ppc_clrldi(c,A,S,n) ppc_rldicl(c,A,S,0,n)
+#define ppc_sldi(c,A,S,n) ppc_rldicr(c,A,S,n,63-(n))
+#endif
 #endif
 
 #endif

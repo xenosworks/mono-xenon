@@ -86,12 +86,12 @@ voidcall_membase: src1:b len:16 clob:c
 fcall: dest:g len:16 clob:c
 fcall_reg: dest:g src1:i len:16 clob:c
 fcall_membase: dest:g src1:b len:16 clob:c
-lcall: dest:l len:16 clob:c
-lcall_reg: dest:l src1:i len:16 clob:c
-lcall_membase: dest:l src1:b len:16 clob:c
-vcall: len:16 clob:c
-vcall_reg: src1:i len:16 clob:c
-vcall_membase: src1:b len:16 clob:c
+lcall: dest:l len:24 clob:c
+lcall_reg: dest:l src1:i len:24 clob:c
+lcall_membase: dest:l src1:b len:24 clob:c
+vcall: len:32 clob:c
+vcall_reg: src1:i len:32 clob:c
+vcall_membase: src1:b len:32 clob:c
 call_reg: dest:a src1:i len:16 clob:c
 call_membase: dest:a src1:b len:16 clob:c
 iconst: dest:i len:8
@@ -130,6 +130,9 @@ storer4_memindex: dest:b src1:i src2:i len:8
 storer8_memindex: dest:b src1:i src2:i len:4
 loadu4_mem: dest:i len:8
 move: dest:i src1:i len:4
+xsdk_i8arg: dest:i src1:i src2:i len:12
+xsdk_structarg: dest:i src1:i len:96
+xsdk_setret: dest:a src1:i len:8
 fmove: dest:f src1:f len:4
 move_f_to_i4: dest:i src1:f len:8
 move_i4_to_f: dest:f src1:i len:8
@@ -339,9 +342,9 @@ int_max: dest:i src1:i src2:i len:8 clob:1
 int_min_un: dest:i src1:i src2:i len:8 clob:1
 int_max_un: dest:i src1:i src2:i len:8 clob:1
 
-vcall2: len:20 clob:c
-vcall2_reg: src1:i len:8 clob:c
-vcall2_membase: src1:b len:16 clob:c
+vcall2: len:36 clob:c
+vcall2_reg: src1:i len:24 clob:c
+vcall2_membase: src1:b len:32 clob:c
 
 jump_table: dest:i len:8
 

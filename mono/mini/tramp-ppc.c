@@ -210,7 +210,17 @@ mono_arch_patch_plt_entry (guint8 *code, gpointer *got, host_mgreg_t *regs, guin
  * PPC_MINIMAL_STACK_SIZE + 16 (args + alignment to ppc_magic_trampoline)
  * + MonoLMF + 14 fp regs + 13 gregs + alignment
  */
-#define STACK (((PPC_MINIMAL_STACK_SIZE + 4 * sizeof (target_mgreg_t) + sizeof (MonoLMF) + 14 * sizeof (double) + 31 * sizeof (target_mgreg_t)) + (MONO_ARCH_FRAME_ALIGNMENT - 1)) & ~(MONO_ARCH_FRAME_ALIGNMENT - 1))
+#ifdef MONO_ARCH_XSDK
+/*
+ * r3-r10 at full width, above the param area. The saved general registers are 4 bytes each for the C handlers'
+ * regs [], and restoring from there would zero the high half of xsdk's 64-bit arguments.
+ */
+#define XSDK_ARG_REGS_OFFSET (PPC_MINIMAL_STACK_SIZE + 4 * sizeof (target_mgreg_t))
+#define XSDK_ARG_REGS_SIZE (8 * 8)
+#else
+#define XSDK_ARG_REGS_SIZE 0
+#endif
+#define STACK (((PPC_MINIMAL_STACK_SIZE + 4 * sizeof (target_mgreg_t) + XSDK_ARG_REGS_SIZE + sizeof (MonoLMF) + 14 * sizeof (double) + 31 * sizeof (target_mgreg_t)) + (MONO_ARCH_FRAME_ALIGNMENT - 1)) & ~(MONO_ARCH_FRAME_ALIGNMENT - 1))
 
 /* Method-specific trampoline code fragment size */
 #define METHOD_TRAMPOLINE_SIZE 64
@@ -246,7 +256,7 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	guint8 *buf, *code = NULL, *exception_branch;
 	int i, offset, offset_r14 = 0;
 	gconstpointer tramp_handler;
-	int size = MONO_PPC_32_64_CASE (700, 900);
+	int size = MONO_PPC_32_64_CASE (700 + 2 * MONO_SAVED_GREGS * 4, 900);
 	GSList *unwind_ops = NULL;
 	MonoJumpInfo *ji = NULL;
 
@@ -267,7 +277,10 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	 * now the integer registers.
 	 */
 	offset = STACK - sizeof (MonoLMF) + G_STRUCT_OFFSET (MonoLMF, iregs);
-	ppc_str_multiple (code, ppc_r13, offset, ppc_r1);
+	for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
+		mono_ppc_save_reg (code, i, offset, ppc_r1);
+		offset += MONO_PPC_SAVED_REG_SIZE;
+	}
 
 	/* Now save the rest of the registers below the MonoLMF struct, first 14
 	 * fp regs and then the 31 gregs.
@@ -286,6 +299,10 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 		}
 		offset += sizeof (target_mgreg_t);
 	}
+#ifdef MONO_ARCH_XSDK
+	for (i = ppc_r3; i <= ppc_r10; i++)
+		ppc_std (code, i, XSDK_ARG_REGS_OFFSET + (i - ppc_r3) * 8, ppc_r1);
+#endif
 
 	/* we got here through a jump to the ctr reg, we must save the lr
 	 * in the parent frame (we do it here to reduce the size of the
@@ -414,7 +431,7 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	/* exception case */
 
 	/* restore caller frame, as we want to throw from there */
-	ppc_ldr  (code, ppc_r14, offset_r14, ppc_r1); /* unclobber r14 */
+	ppc_ldr (code, ppc_r14, offset_r14, ppc_r1); /* unclobber r14 */
 	ppc_ldr  (code, ppc_r1,  0, ppc_r1);
 	ppc_ldr  (code, ppc_r12, PPC_RET_ADDR_OFFSET, ppc_r1);
 	ppc_mtlr (code, ppc_r12);
@@ -442,7 +459,9 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 
 	ppc_addi (code, ppc_r12, ppc_r1, STACK - sizeof (MonoLMF));
 	/* restore iregs */
-	ppc_ldr_multiple (code, ppc_r13, G_STRUCT_OFFSET(MonoLMF, iregs), ppc_r12);
+	for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++)
+		mono_ppc_restore_reg (code, i, G_STRUCT_OFFSET(MonoLMF, iregs) +
+			(i - MONO_PPC_FIRST_SAVED_GREG) * MONO_PPC_SAVED_REG_SIZE, ppc_r12);
 	/* restore fregs */
 	for (i = 14; i < 32; i++)
 		ppc_lfd (code, i, G_STRUCT_OFFSET(MonoLMF, fregs) + ((i-14) * sizeof (gdouble)), ppc_r12);
@@ -457,6 +476,20 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	ppc_ldr (code, ppc_r0, offset, ppc_r1);
 	offset += 2 * sizeof (target_mgreg_t);
 	for (i = 2; i < 13; i++) {
+#ifdef MONO_ARCH_XSDK
+		if (i == ppc_r2) {
+			offset += sizeof (target_mgreg_t);
+			continue;
+		}
+#endif
+#ifdef MONO_ARCH_XSDK
+		if (i >= ppc_r3 && i <= ppc_r10) {
+			if (i != 3 || tramp_type != MONO_TRAMPOLINE_RGCTX_LAZY_FETCH)
+				ppc_ld (code, i, XSDK_ARG_REGS_OFFSET + (i - ppc_r3) * 8, ppc_r1);
+			offset += sizeof (target_mgreg_t);
+			continue;
+		}
+#endif
 		if (i != PPC_TOC_REG && (i != 3 || tramp_type != MONO_TRAMPOLINE_RGCTX_LAZY_FETCH))
 			ppc_ldr (code, i, offset, ppc_r1);
 		offset += sizeof (target_mgreg_t);
@@ -469,6 +502,9 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	ppc_ldr  (code, ppc_r1,  0, ppc_r1);
 	ppc_ldr  (code, ppc_r12, PPC_RET_ADDR_OFFSET, ppc_r1);
 	ppc_mtlr (code, ppc_r12);
+#ifdef MONO_ARCH_XSDK
+	ppc_isync (code);
+#endif
 	if (MONO_TRAMPOLINE_TYPE_MUST_RETURN (tramp_type))
 		ppc_blr (code);
 	else

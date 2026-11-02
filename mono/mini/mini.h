@@ -798,6 +798,11 @@ struct MonoCallInst {
 	GSList *out_freg_args;
 	GSList *outarg_vts;
 	CallInfo *call_info;
+#ifdef MONO_ARCH_XSDK
+	GSList *xsdk_late_args;
+	guint xsdk_struct_ret;
+	gboolean xsdk_vret_retaddr;
+#endif
 #ifdef ENABLE_LLVM
 	LLVMCallInfo *cinfo;
 	int rgctx_arg_reg, imt_arg_reg;
@@ -2381,6 +2386,9 @@ int       mono_arch_get_argument_info           (MonoMethodSignature *csig, int 
 void      mono_arch_emit_call                   (MonoCompile *cfg, MonoCallInst *call);
 void      mono_arch_emit_outarg_vt              (MonoCompile *cfg, MonoInst *ins, MonoInst *src);
 void      mono_arch_emit_setret                 (MonoCompile *cfg, MonoMethod *method, MonoInst *val);
+#ifdef MONO_ARCH_XSDK
+gboolean  mono_arch_xsdk_native_method          (MonoMethod *method);
+#endif
 MonoDynCallInfo *mono_arch_dyn_call_prepare     (MonoMethodSignature *sig);
 void      mono_arch_dyn_call_free               (MonoDynCallInfo *info);
 int       mono_arch_dyn_call_get_buf_size       (MonoDynCallInfo *info);

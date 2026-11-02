@@ -74,6 +74,9 @@ update_current_thread_stack (void *start)
 
 #if !defined(MONO_CROSS_COMPILE) && MONO_ARCH_HAS_MONO_CONTEXT
 	MONO_CONTEXT_GET_CURRENT (info->client_info.ctx);
+#ifdef MONO_ARCH_XSDK
+	MONO_CONTEXT_SET_IP (&info->client_info.ctx, update_current_thread_stack);
+#endif
 #elif defined (HOST_WASM)
 	//nothing
 #else

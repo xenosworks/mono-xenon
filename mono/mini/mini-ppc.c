@@ -23,6 +23,9 @@
 #include "mono/utils/mono-tls-inline.h"
 
 #include "mini-ppc.h"
+#ifdef TARGET_XSDK
+#include <xsdk/jit.h>
+#endif
 #ifdef TARGET_POWERPC64
 #include "cpu-ppc64.h"
 #else
@@ -723,6 +726,10 @@ mono_arch_regalloc_cost (MonoCompile *cfg, MonoMethodVar *vmv)
 void
 mono_arch_flush_icache (guint8 *code, gint size)
 {
+#ifdef TARGET_XSDK
+	xsdk_code_flush (code, size);
+	return;
+#endif
 #ifdef MONO_CROSS_COMPILE
 	/* do nothing */
 #else
@@ -992,9 +999,235 @@ has_only_a_r48_field (MonoClass *klass)
 }
 #endif
 
+#ifdef MONO_ARCH_XSDK
+static int
+xsdk_native_size (MonoType *type)
+{
+	if (type->type == MONO_TYPE_TYPEDBYREF)
+		return MONO_ABI_SIZEOF (MonoTypedRef);
+	return mono_class_native_size (mono_class_from_mono_type_internal (type), NULL);
+}
+
+static gboolean
+xsdk_return_in_registers (int size)
+{
+	return size == 1 || size == 2 || size == 4 || size == 8;
+}
+
+static void
+add_xsdk_general (guint *gr, guint *slot, ArgInfo *ainfo)
+{
+	if (*gr > PPC_LAST_ARG_REG) {
+		ainfo->offset = 0x10 + 8 * *slot;
+		if (ainfo->size < 8)
+			ainfo->offset += 4;
+		ainfo->reg = ppc_sp;
+		ainfo->regtype = RegTypeBase;
+	} else {
+		ainfo->reg = *gr;
+	}
+	(*gr)++;
+	(*slot)++;
+}
+
+static CallInfo*
+get_xsdk_call_info (MonoMethodSignature *sig)
+{
+	guint i, fr, gr;
+	MonoType *type;
+	int n = sig->hasthis + sig->param_count;
+	guint32 slot = 0;
+	CallInfo *cinfo = g_malloc0 (sizeof (CallInfo) + sizeof (ArgInfo) * n);
+
+	if (sig->call_convention == MONO_CALL_VARARG)
+		g_error ("xsdk native varargs are not implemented");
+
+	fr = PPC_FIRST_FPARG_REG;
+	gr = PPC_FIRST_ARG_REG;
+	n = 0;
+
+	if (mini_type_is_vtype (sig->ret) && !xsdk_return_in_registers (xsdk_native_size (sig->ret))) {
+		cinfo->vtype_retaddr = TRUE;
+		cinfo->ret.size = 4;
+		add_xsdk_general (&gr, &slot, &cinfo->ret);
+		cinfo->struct_ret = cinfo->ret.reg;
+	}
+
+	if (sig->hasthis) {
+		cinfo->args [n].size = 4;
+		add_xsdk_general (&gr, &slot, cinfo->args + n);
+		n++;
+	}
+
+	for (i = 0; i < sig->param_count; ++i) {
+		if (sig->params [i]->byref) {
+			cinfo->args [n].size = 4;
+			add_xsdk_general (&gr, &slot, cinfo->args + n);
+			n++;
+			continue;
+		}
+		type = mini_get_underlying_type (sig->params [i]);
+		switch (type->type) {
+		case MONO_TYPE_BOOLEAN:
+		case MONO_TYPE_I1:
+		case MONO_TYPE_U1:
+			cinfo->args [n].size = 1;
+			add_xsdk_general (&gr, &slot, cinfo->args + n);
+			break;
+		case MONO_TYPE_CHAR:
+		case MONO_TYPE_I2:
+		case MONO_TYPE_U2:
+			cinfo->args [n].size = 2;
+			add_xsdk_general (&gr, &slot, cinfo->args + n);
+			break;
+		case MONO_TYPE_I4:
+		case MONO_TYPE_U4:
+		case MONO_TYPE_I:
+		case MONO_TYPE_U:
+		case MONO_TYPE_PTR:
+		case MONO_TYPE_FNPTR:
+		case MONO_TYPE_CLASS:
+		case MONO_TYPE_OBJECT:
+		case MONO_TYPE_STRING:
+		case MONO_TYPE_SZARRAY:
+		case MONO_TYPE_ARRAY:
+			cinfo->args [n].size = 4;
+			add_xsdk_general (&gr, &slot, cinfo->args + n);
+			break;
+		case MONO_TYPE_I8:
+		case MONO_TYPE_U8:
+			cinfo->args [n].size = 8;
+			add_xsdk_general (&gr, &slot, cinfo->args + n);
+			break;
+		case MONO_TYPE_R4:
+		case MONO_TYPE_R8:
+			cinfo->args [n].size = type->type == MONO_TYPE_R4 ? 4 : 8;
+			if (fr <= XSDK_LAST_FPARG_REG && sig->call_convention != MONO_CALL_VARARG) {
+				cinfo->args [n].regtype = RegTypeFP;
+				cinfo->args [n].reg = fr++;
+			} else {
+				cinfo->args [n].offset = 0x10 + 8 * slot;
+				if (type->type == MONO_TYPE_R4)
+					cinfo->args [n].offset += 4;
+				cinfo->args [n].reg = ppc_sp;
+				cinfo->args [n].regtype = RegTypeBase;
+			}
+			gr++;
+			slot++;
+			break;
+		case MONO_TYPE_GENERICINST:
+			if (!mono_type_generic_inst_is_valuetype (type)) {
+				cinfo->args [n].size = 4;
+				add_xsdk_general (&gr, &slot, cinfo->args + n);
+				break;
+			}
+			/* Fall through */
+		case MONO_TYPE_VALUETYPE:
+		case MONO_TYPE_TYPEDBYREF: {
+			int size = xsdk_native_size (sig->params [i]);
+			gboolean right_justified = size == 1 || size == 2 || size == 4;
+			int nregs = right_justified ? 1 : (size + 7) / 8;
+			int rest = PPC_LAST_ARG_REG - gr + 1;
+			int n_in_regs = MAX (rest, 0);
+
+			n_in_regs = MIN (n_in_regs, nregs);
+			if (size > 8)
+				slot = (slot + 1) & ~1;
+			cinfo->args [n].regtype = RegTypeStructByVal;
+			cinfo->args [n].vtregs = n_in_regs;
+			cinfo->args [n].vtsize = nregs - n_in_regs;
+			cinfo->args [n].size = n_in_regs;
+			cinfo->args [n].bytes = size <= 8 ? size : 0;
+			cinfo->args [n].reg = gr;
+			cinfo->args [n].offset = 0x10 + 8 * slot;
+			if (right_justified)
+				cinfo->args [n].offset += 8 - size;
+			gr += n_in_regs;
+			slot += nregs;
+			break;
+		}
+		default:
+			g_error ("xsdk native argument type 0x%x is not implemented", type->type);
+		}
+		n++;
+	}
+
+	cinfo->nargs = n;
+	cinfo->stack_usage = slot > 8 ? (slot - 8) * 8 : 0;
+	cinfo->stack_usage = (cinfo->stack_usage + 15) & ~15;
+
+	type = mini_get_underlying_type (sig->ret);
+	switch (type->type) {
+	case MONO_TYPE_R4:
+	case MONO_TYPE_R8:
+		cinfo->ret.reg = ppc_f1;
+		cinfo->ret.regtype = RegTypeFP;
+		break;
+	case MONO_TYPE_VOID:
+		break;
+	default:
+		if (!cinfo->vtype_retaddr) {
+			cinfo->ret.reg = ppc_r3;
+			if (mini_type_is_vtype (type))
+				cinfo->ret.bytes = xsdk_native_size (type);
+		}
+		break;
+	}
+
+	return cinfo;
+}
+
+/*
+ * A pinvoke signature means C code or a method entered as native (a JIT icall's wrapper; see
+ * mono_arch_xsdk_native_method). A call to a method is laid out as managed (mono_arch_emit_call), whatever its own
+ * signature says.
+ */
+static gboolean
+is_xsdk_native_call (MonoCallInst *call)
+{
+	return call->signature->pinvoke;
+}
+
+/*
+ * Whether METHOD is entered with xsdk's layout. JIT icall wrappers are compiled with a non-pinvoke copy of the icall's
+ * signature (marshal.c, mono_marshal_get_icall_wrapper) but called with the icall's own, pinvoke, signature
+ * (calls.c, mono_emit_jit_icall_id), so they're entered as native. P/Invoke wrappers are called by managed code with
+ * pinvoke cleared (method-to-ir.c, the METHOD_ATTRIBUTE_PINVOKE_IMPL call) and keep Mono's layout.
+ */
+gboolean
+mono_arch_xsdk_native_method (MonoMethod *method)
+{
+	if (method->signature->pinvoke)
+		return TRUE;
+	if (method->wrapper_type != MONO_WRAPPER_MANAGED_TO_NATIVE)
+		return FALSE;
+	return mono_marshal_get_wrapper_info (method)->subtype == WRAPPER_SUBTYPE_ICALL_WRAPPER;
+}
+
+static gboolean
+is_xsdk_native_method (MonoMethod *method)
+{
+	return mono_arch_xsdk_native_method (method);
+}
+#else
+/* Elsewhere a pinvoke signature alone says a call or method is native, as upstream. */
+static gboolean
+is_xsdk_native_call (MonoCallInst *call)
+{
+	return call->signature->pinvoke;
+}
+
+static gboolean
+is_xsdk_native_method (MonoMethod *method)
+{
+	return method->signature->pinvoke;
+}
+#endif
+
 static CallInfo*
 get_call_info (MonoMethodSignature *sig)
 {
+	/* Mono's own layout; on xsdk, calls and prologs choose get_xsdk_call_info themselves (is_xsdk_native_call). */
 	guint i, fr, gr, pstart;
 	int n = sig->hasthis + sig->param_count;
 	MonoType *simpletype;
@@ -1498,7 +1731,7 @@ mono_arch_allocate_vars (MonoCompile *m)
 		if (inst->opcode != OP_REGVAR) {
 			inst->opcode = OP_REGOFFSET;
 			inst->inst_basereg = frame_reg;
-			if (sig->pinvoke) {
+			if (is_xsdk_native_method (m->method)) {
 				size = mono_type_native_stack_size (sig->params [i], (guint32*)&align);
 				inst->backend.is_pinvoke = 1;
 			} else {
@@ -1568,6 +1801,87 @@ emit_sig_cookie (MonoCompile *cfg, MonoCallInst *call, CallInfo *cinfo)
 			ppc_r1, cinfo->sig_cookie.offset, sig_reg);
 }
 
+#ifdef MONO_ARCH_XSDK
+typedef struct {
+	int hreg;
+	int offset;
+	int size;
+} XsdkLateArg;
+
+static void
+add_xsdk_late_arg (MonoCompile *cfg, MonoCallInst *call, int hreg, int offset, int size)
+{
+	XsdkLateArg *arg = mono_mempool_alloc0 (cfg->mempool, sizeof (XsdkLateArg));
+
+	arg->hreg = hreg;
+	arg->offset = offset;
+	arg->size = size;
+	call->xsdk_late_args = g_slist_append_mempool (cfg->mempool, call->xsdk_late_args, arg);
+}
+
+static guint8 *
+emit_xsdk_reload_vret (MonoCallInst *call, guint8 *code, MonoInst *loc, int hreg)
+{
+	if (ppc_is_imm16 (loc->inst_offset))
+		ppc_ldptr (code, hreg, loc->inst_offset, loc->inst_basereg);
+	else {
+		int scratch = call->inst.sreg1 == ppc_r12 ? ppc_r11 : ppc_r12;
+
+		ppc_load (code, scratch, loc->inst_offset);
+		ppc_ldptr_indexed (code, hreg, loc->inst_basereg, scratch);
+	}
+	return code;
+}
+
+static int
+xsdk_late_args_size (MonoCompile *cfg, MonoCallInst *call)
+{
+	GSList *l;
+	int size = 0;
+
+	for (l = call->xsdk_late_args; l; l = l->next) {
+		XsdkLateArg *arg = l->data;
+
+		if (arg->size == 8)
+			size += 4;
+		else
+			size += (1 + (arg->size - 1) * 3 + 2) * 4;
+	}
+	if (call->xsdk_vret_retaddr && call->xsdk_struct_ret != ppc_sp && cfg->arch.vret_addr_loc)
+		size += ppc_is_imm16 (cfg->arch.vret_addr_loc->inst_offset) ? 4 : 12;
+	return size;
+}
+
+static guint8 *
+emit_xsdk_late_args (MonoCompile *cfg, MonoCallInst *call, guint8 *code)
+{
+	GSList *l;
+
+	for (l = call->xsdk_late_args; l; l = l->next) {
+		XsdkLateArg *arg = l->data;
+		int i;
+
+		if (arg->size == 8) {
+			ppc_ld (code, arg->hreg, arg->offset, arg->hreg);
+		} else {
+			int scratch = call->inst.sreg1 == ppc_r12 ? ppc_r11 : ppc_r12;
+
+			ppc_lbz (code, ppc_r0, arg->offset, arg->hreg);
+			for (i = 1; i < arg->size; ++i) {
+				ppc_sldi (code, ppc_r0, ppc_r0, 8);
+				ppc_lbz (code, scratch, arg->offset + i, arg->hreg);
+				ppc_or (code, ppc_r0, ppc_r0, scratch);
+			}
+			ppc_sldi (code, ppc_r0, ppc_r0, (8 - arg->size) * 8);
+			ppc_mr (code, arg->hreg, ppc_r0);
+		}
+	}
+	if (call->xsdk_vret_retaddr && call->xsdk_struct_ret != ppc_sp && cfg->arch.vret_addr_loc)
+		code = emit_xsdk_reload_vret (call, code, cfg->arch.vret_addr_loc, call->xsdk_struct_ret);
+	return code;
+}
+#endif
+
 void
 mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 {
@@ -1575,11 +1889,44 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 	MonoMethodSignature *sig;
 	int i, n;
 	CallInfo *cinfo;
+#ifdef MONO_ARCH_XSDK
+	gboolean native_call;
+
+	/*
+	 * An internal call's own signature is pinvoke (loader.c), and corlib calls some with it, its string constructors
+	 * by newobj; but the call reaches the method's wrapper, which takes Mono's layout. Laid out as pinvoke, even by
+	 * Mono's own rules, new string (ReadOnlySpan<char>) in corlib passed its span by value to a wrapper reading it
+	 * through a pointer.
+	 */
+	if (call->signature->pinvoke && call->method) {
+		call->signature = mono_metadata_signature_dup_mempool (cfg->mempool, call->signature);
+		call->signature->pinvoke = 0;
+	}
+	native_call = is_xsdk_native_call (call);
+#endif
 
 	sig = call->signature;
 	n = sig->param_count + sig->hasthis;
 	
+#ifdef MONO_ARCH_XSDK
+	cinfo = native_call ? get_xsdk_call_info (sig) : get_call_info (sig);
+#else
 	cinfo = get_call_info (sig);
+#endif
+
+#ifdef MONO_ARCH_XSDK
+	if (native_call) {
+		call->xsdk_struct_ret = cinfo->struct_ret;
+		call->xsdk_vret_retaddr = cinfo->vtype_retaddr;
+	}
+	if (native_call && mini_type_is_vtype (sig->ret)) {
+		if (!cfg->arch.vret_addr_loc) {
+			cfg->arch.vret_addr_loc = mono_compile_create_var (cfg, mono_get_int_type (), OP_LOCAL);
+			cfg->arch.vret_addr_loc->flags |= MONO_INST_VOLATILE;
+		}
+		MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, cfg->arch.vret_addr_loc->dreg, call->vret_var->dreg);
+	}
+#endif
 
 	for (i = 0; i < n; ++i) {
 		ArgInfo *ainfo = cinfo->args + i;
@@ -1597,6 +1944,18 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 		in = call->args [i];
 
 		if (ainfo->regtype == RegTypeGeneral) {
+#ifdef MONO_ARCH_XSDK
+			if (native_call && !t->byref && ((t->type == MONO_TYPE_I8) || (t->type == MONO_TYPE_U8))) {
+				MonoInst *addr;
+				int dreg;
+
+				EMIT_NEW_VARLOADA_VREG (cfg, addr, in->dreg, t);
+				dreg = mono_alloc_ireg (cfg);
+				MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, dreg, addr->dreg);
+				mono_call_inst_add_outarg_reg (cfg, call, dreg, ainfo->reg, FALSE);
+				add_xsdk_late_arg (cfg, call, ainfo->reg, 0, 8);
+			} else
+#endif
 #ifndef __mono_ppc64__
 			if (!t->byref && ((t->type == MONO_TYPE_I8) || (t->type == MONO_TYPE_U8))) {
 				MONO_INST_NEW (cfg, ins, OP_MOVE);
@@ -1702,12 +2061,19 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 	if (cinfo->struct_ret) {
 		MonoInst *vtarg;
 
-		MONO_INST_NEW (cfg, vtarg, OP_MOVE);
-		vtarg->sreg1 = call->vret_var->dreg;
-		vtarg->dreg = mono_alloc_preg (cfg);
-		MONO_ADD_INS (cfg->cbb, vtarg);
+#ifdef MONO_ARCH_XSDK
+		if (cinfo->ret.regtype == RegTypeBase) {
+			MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, ppc_r1, cinfo->ret.offset, call->vret_var->dreg);
+		} else
+#endif
+		{
+			MONO_INST_NEW (cfg, vtarg, OP_MOVE);
+			vtarg->sreg1 = call->vret_var->dreg;
+			vtarg->dreg = mono_alloc_preg (cfg);
+			MONO_ADD_INS (cfg->cbb, vtarg);
 
-		mono_call_inst_add_outarg_reg (cfg, call, vtarg->dreg, cinfo->struct_ret, FALSE);
+			mono_call_inst_add_outarg_reg (cfg, call, vtarg->dreg, cinfo->struct_ret, FALSE);
+		}
 	}
 
 	call->stack_usage = cinfo->stack_usage;
@@ -1729,6 +2095,35 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 	int i, soffset, dreg;
 
 	if (ainfo->regtype == RegTypeStructByVal) {
+#ifdef MONO_ARCH_XSDK
+		if (is_xsdk_native_call (call)) {
+			int size = xsdk_native_size (m_class_get_byval_arg (ins->klass));
+
+			soffset = 0;
+			for (i = 0; i < ainfo->vtregs; ++i) {
+				int chunk = MIN (8, size - soffset);
+
+				dreg = mono_alloc_ireg (cfg);
+				if (size == 1 || size == 2 || size == 4) {
+					int opcode = size == 1 ? OP_LOADU1_MEMBASE : size == 2 ? OP_LOADU2_MEMBASE : OP_LOAD_MEMBASE;
+					MONO_EMIT_NEW_LOAD_MEMBASE_OP (cfg, opcode, dreg, src->dreg, 0);
+				} else {
+					MonoInst *load;
+
+					MONO_INST_NEW (cfg, load, OP_MOVE);
+					load->dreg = dreg;
+					load->sreg1 = src->dreg;
+					MONO_ADD_INS (cfg->cbb, load);
+					add_xsdk_late_arg (cfg, call, ainfo->reg + i, soffset, chunk);
+				}
+				mono_call_inst_add_outarg_reg (cfg, call, dreg, ainfo->reg + i, FALSE);
+				soffset += chunk;
+			}
+			if (ainfo->vtsize)
+				mini_emit_memcpy (cfg, ppc_r1, ainfo->offset + soffset, src->dreg, soffset, size - soffset, 1);
+			return;
+		}
+#endif
 #ifdef __APPLE__
 		guint32 size = 0;
 #endif
@@ -1801,7 +2196,7 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 		guint32 size;
 
 		/* FIXME: alignment? */
-		if (call->signature->pinvoke) {
+		if (is_xsdk_native_call (call)) {
 			size = mono_type_native_stack_size (m_class_get_byval_arg (src->klass), NULL);
 			vtcopy->backend.is_pinvoke = 1;
 		} else {
@@ -1825,6 +2220,18 @@ mono_arch_emit_setret (MonoCompile *cfg, MonoMethod *method, MonoInst *val)
 {
 	MonoType *ret = mini_get_underlying_type (mono_method_signature_internal (method)->ret);
 	if (!ret->byref) {
+#ifdef MONO_ARCH_XSDK
+		if (is_xsdk_native_method (method) && (ret->type == MONO_TYPE_I8 || ret->type == MONO_TYPE_U8)) {
+			MonoInst *ins;
+
+			MONO_INST_NEW (cfg, ins, OP_XSDK_I8ARG);
+			ins->dreg = ppc_r3;
+			ins->sreg1 = MONO_LVREG_MS (val->dreg);
+			ins->sreg2 = MONO_LVREG_LS (val->dreg);
+			MONO_ADD_INS (cfg->cbb, ins);
+			return;
+		}
+#endif
 #ifndef __mono_ppc64__
 		if (ret->type == MONO_TYPE_I8 || ret->type == MONO_TYPE_U8) {
 			MonoInst *ins;
@@ -2953,6 +3360,52 @@ static guint8*
 emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 {
 	switch (ins->opcode) {
+#ifdef MONO_ARCH_XSDK
+	case OP_LCALL:
+	case OP_LCALL_REG:
+	case OP_LCALL_MEMBASE: {
+		MonoCallInst *call = (MonoCallInst *)ins;
+		MonoType *type = mini_get_underlying_type (call->signature->ret);
+		if (is_xsdk_native_call (call) && (type->type == MONO_TYPE_I8 || type->type == MONO_TYPE_U8)) {
+			ppc_mr (code, ppc_r4, ppc_r3);
+			ppc_srdi (code, ppc_r3, ppc_r3, 32);
+		}
+		break;
+	}
+	case OP_VCALL:
+	case OP_VCALL_REG:
+	case OP_VCALL_MEMBASE:
+	case OP_VCALL2:
+	case OP_VCALL2_REG:
+	case OP_VCALL2_MEMBASE: {
+		MonoCallInst *call = (MonoCallInst *)ins;
+
+		if (is_xsdk_native_call (call) && mini_type_is_vtype (call->signature->ret)) {
+			int size = xsdk_native_size (call->signature->ret);
+
+			if (xsdk_return_in_registers (size)) {
+				MonoInst *loc = cfg->arch.vret_addr_loc;
+
+				g_assert (loc);
+				if (ppc_is_imm16 (loc->inst_offset))
+					ppc_ldptr (code, ppc_r12, loc->inst_offset, loc->inst_basereg);
+				else {
+					ppc_load (code, ppc_r12, loc->inst_offset);
+					ppc_ldptr_indexed (code, ppc_r12, loc->inst_basereg, ppc_r12);
+				}
+				if (size == 1)
+					ppc_stb (code, ppc_r3, 0, ppc_r12);
+				else if (size == 2)
+					ppc_sth (code, ppc_r3, 0, ppc_r12);
+				else if (size == 4)
+					ppc_stw (code, ppc_r3, 0, ppc_r12);
+				else
+					ppc_std (code, ppc_r3, 0, ppc_r12);
+			}
+		}
+		break;
+	}
+#endif
 	case OP_FCALL:
 	case OP_FCALL_REG:
 	case OP_FCALL_MEMBASE:
@@ -3032,6 +3485,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		const guint offset = code - cfg->native_code;
 		set_code_cursor (cfg, code);
 		max_len = ins_get_size (ins->opcode);
+#ifdef MONO_ARCH_XSDK
+		if (MONO_IS_CALL (ins))
+			max_len += xsdk_late_args_size (cfg, (MonoCallInst *)ins);
+#endif
 		code = realloc_code (cfg, max_len);
 	//	if (ins->cil_code)
 	//		g_print ("cil code\n");
@@ -3653,6 +4110,55 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			if (ins->dreg != ins->sreg1)
 				ppc_mr (code, ins->dreg, ins->sreg1);
 			break;
+#ifdef MONO_ARCH_XSDK
+		case OP_XSDK_I8ARG:
+			if (ins->dreg == ins->sreg2) {
+				ppc_clrldi (code, ins->dreg, ins->sreg2, 32);
+				ppc_rldimi (code, ins->dreg, ins->sreg1, 32, 0);
+			} else {
+				if (ins->dreg != ins->sreg1)
+					ppc_mr (code, ins->dreg, ins->sreg1);
+				ppc_sldi (code, ins->dreg, ins->dreg, 32);
+				ppc_rldimi (code, ins->dreg, ins->sreg2, 0, 32);
+			}
+			break;
+		case OP_XSDK_STRUCTARG: {
+			int size = ins->inst_c0;
+
+			if (size == 8) {
+				ppc_ld (code, ins->dreg, ins->inst_offset, ins->sreg1);
+			} else {
+				int base = ins->dreg == ppc_r11 ? ppc_r12 : ppc_r11;
+
+				ppc_mr (code, base, ins->sreg1);
+				ppc_lbz (code, ins->dreg, ins->inst_offset, base);
+				for (int i = 1; i < size; ++i) {
+					ppc_sldi (code, ins->dreg, ins->dreg, 8);
+					ppc_lbz (code, ppc_r0, ins->inst_offset + i, base);
+					ppc_or (code, ins->dreg, ins->dreg, ppc_r0);
+				}
+				ppc_sldi (code, ins->dreg, ins->dreg, (8 - size) * 8);
+			}
+			break;
+		}
+		case OP_XSDK_SETRET: {
+			int size = ins->inst_c0;
+
+			ppc_mr (code, ppc_r12, ins->sreg1);
+			if (size == 1) {
+				ppc_lbz (code, ppc_r3, 0, ppc_r12);
+			} else if (size == 2) {
+				ppc_lhz (code, ppc_r3, 0, ppc_r12);
+			} else if (size == 4) {
+				ppc_lwz (code, ppc_r3, 0, ppc_r12);
+			} else if (size == 8) {
+				ppc_ld (code, ppc_r3, 0, ppc_r12);
+			} else {
+				g_assert_not_reached ();
+			}
+			break;
+		}
+#endif
 		case OP_SETLRET: {
 			int saved = ins->sreg1;
 			if (ins->sreg1 == ppc_r3) {
@@ -3701,6 +4207,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			int i, pos;
 			MonoCallInst *call = (MonoCallInst*)ins;
 
+#ifdef MONO_ARCH_XSDK
+			code = emit_xsdk_late_args (cfg, call, code);
+#endif
+
 			/*
 			 * Keep in sync with mono_arch_emit_epilog
 			 */
@@ -3729,11 +4239,12 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 				ppc_addi (code, ppc_r12, ppc_r12, cfg->stack_usage);
 			}
 			if (!cfg->method->save_lmf) {
+				/* As the epilog restores them, full width on xsdk (mini-ppc.h, MONO_PPC_SAVED_REG_SIZE). */
 				pos = 0;
-				for (i = 31; i >= 13; --i) {
+				for (i = 31; i >= MONO_PPC_FIRST_SAVED_GREG; --i) {
 					if (cfg->used_int_regs & (1 << i)) {
-						pos += sizeof (target_mgreg_t);
-						ppc_ldptr (code, i, -pos, ppc_r12);
+						pos += MONO_PPC_SAVED_REG_SIZE;
+						mono_ppc_restore_reg (code, i, -pos, ppc_r12);
 					}
 				}
 			} else {
@@ -3796,7 +4307,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		case OP_VOIDCALL:
 		case OP_CALL:
 			call = (MonoCallInst*)ins;
-			mono_call_add_patch_info (cfg, call, offset);
+#ifdef MONO_ARCH_XSDK
+			code = emit_xsdk_late_args (cfg, call, code);
+#endif
+			mono_call_add_patch_info (cfg, call, code - cfg->native_code);
 			if ((FORCE_INDIR_CALL || cfg->method->dynamic) && !cfg->compile_aot) {
 				ppc_load_func (code, PPC_CALL_REG, 0);
 				ppc_mtlr (code, PPC_CALL_REG);
@@ -3813,6 +4327,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		case OP_VCALL2_REG:
 		case OP_VOIDCALL_REG:
 		case OP_CALL_REG:
+			call = (MonoCallInst*)ins;
+#ifdef MONO_ARCH_XSDK
+			code = emit_xsdk_late_args (cfg, call, code);
+#endif
 #ifdef PPC_USES_FUNCTION_DESCRIPTOR
 			ppc_ldptr (code, ppc_r0, 0, ins->sreg1);
 			/* FIXME: if we know that this is a method, we
@@ -3842,6 +4360,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		case OP_VCALL2_MEMBASE:
 		case OP_VOIDCALL_MEMBASE:
 		case OP_CALL_MEMBASE:
+			call = (MonoCallInst*)ins;
+#ifdef MONO_ARCH_XSDK
+			code = emit_xsdk_late_args (cfg, call, code);
+#endif
 			if (cfg->compile_aot && ins->sreg1 == ppc_r12) {
 				/* The trampolines clobber this */
 				ppc_mr (code, ppc_r29, ins->sreg1);
@@ -4687,20 +5209,20 @@ save_registers (MonoCompile *cfg, guint8* code, int pos, int base_reg, gboolean 
 {
 	int i;
 	if (!save_lmf) {
-		for (i = 13; i <= 31; i++) {
+		for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
 			if (used_int_regs & (1 << i)) {
-				ppc_str (code, i, pos, base_reg);
-				mono_emit_unwind_op_offset (cfg, code, i, pos - cfa_offset);
-				pos += sizeof (target_mgreg_t);
+				mono_ppc_save_reg (code, i, pos, base_reg);
+				mono_emit_unwind_op_offset (cfg, code, i, MONO_PPC_UNWIND_REG_OFFSET (pos - cfa_offset));
+				pos += MONO_PPC_SAVED_REG_SIZE;
 			}
 		}
 	} else {
 		/* pos is the start of the MonoLMF structure */
 		int offset = pos + G_STRUCT_OFFSET (MonoLMF, iregs);
-		for (i = 13; i <= 31; i++) {
-			ppc_str (code, i, offset, base_reg);
-			mono_emit_unwind_op_offset (cfg, code, i, offset - cfa_offset);
-			offset += sizeof (target_mgreg_t);
+		for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
+			mono_ppc_save_reg (code, i, offset, base_reg);
+			mono_emit_unwind_op_offset (cfg, code, i, MONO_PPC_UNWIND_REG_OFFSET (offset - cfa_offset));
+			offset += MONO_PPC_SAVED_REG_SIZE;
 		}
 		offset = pos + G_STRUCT_OFFSET (MonoLMF, fregs);
 		for (i = 14; i < 32; i++) {
@@ -4760,9 +5282,9 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	pos = 0;
 
 	if (!method->save_lmf) {
-		for (i = 31; i >= 13; --i) {
+		for (i = 31; i >= MONO_PPC_FIRST_SAVED_GREG; --i) {
 			if (cfg->used_int_regs & (1 << i)) {
-				pos += sizeof (target_mgreg_t);
+				pos += MONO_PPC_SAVED_REG_SIZE;
 			}
 		}
 	} else {
@@ -4823,9 +5345,13 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	/* load arguments allocated to register from the stack */
 	pos = 0;
 
+#ifdef MONO_ARCH_XSDK
+	cinfo = is_xsdk_native_method (method) ? get_xsdk_call_info (sig) : get_call_info (sig);
+#else
 	cinfo = get_call_info (sig);
+#endif
 
-	if (MONO_TYPE_ISSTRUCT (sig->ret)) {
+	if (MONO_TYPE_ISSTRUCT (sig->ret) && cinfo->vtype_retaddr) {
 		ArgInfo *ainfo = &cinfo->ret;
 
 		inst = cfg->vret_addr;
@@ -4913,6 +5439,16 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 					break;
 #else
 				case 8:
+#ifdef MONO_ARCH_XSDK
+					if (is_xsdk_native_method (method)) {
+						if (ppc_is_imm16 (inst->inst_offset)) {
+							ppc_std (code, ainfo->reg, inst->inst_offset, inst->inst_basereg);
+						} else {
+							ppc_load (code, ppc_r12, inst->inst_offset);
+							ppc_stdx (code, ainfo->reg, inst->inst_basereg, ppc_r12);
+						}
+					} else
+#endif
 					if (ppc_is_imm16 (inst->inst_offset + 4)) {
 						ppc_stw (code, ainfo->reg, inst->inst_offset, inst->inst_basereg);
 						ppc_stw (code, ainfo->reg + 1, inst->inst_offset + 4, inst->inst_basereg);
@@ -5039,7 +5575,7 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 				g_assert (ppc_is_imm16 (inst->inst_offset));
 				g_assert (ppc_is_imm16 (inst->inst_offset + ainfo->vtregs * sizeof (target_mgreg_t)));
 				/* FIXME: what if there is no class? */
-				if (sig->pinvoke && mono_class_from_mono_type_internal (inst->inst_vtype))
+				if (is_xsdk_native_method (method) && mono_class_from_mono_type_internal (inst->inst_vtype))
 					size = mono_class_native_size (mono_class_from_mono_type_internal (inst->inst_vtype), NULL);
 				for (cur_reg = 0; cur_reg < ainfo->vtregs; ++cur_reg) {
 					if (ainfo->size == 4) {
@@ -5058,8 +5594,39 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 				g_assert (ppc_is_imm16 (inst->inst_offset));
 				g_assert (ppc_is_imm16 (inst->inst_offset + ainfo->vtregs * sizeof (target_mgreg_t)));
 				/* FIXME: what if there is no class? */
-				if (sig->pinvoke && mono_class_from_mono_type_internal (inst->inst_vtype))
+				if (is_xsdk_native_method (method) && mono_class_from_mono_type_internal (inst->inst_vtype))
 					size = mono_class_native_size (mono_class_from_mono_type_internal (inst->inst_vtype), NULL);
+#ifdef MONO_ARCH_XSDK
+				if (is_xsdk_native_method (method)) {
+					for (cur_reg = 0; cur_reg < ainfo->vtregs; ++cur_reg) {
+						int chunk = MIN (8, size - soffset);
+						int reg = ainfo->reg + cur_reg;
+
+						if (size == 1 || size == 2 || size == 4) {
+							if (size == 1)
+								ppc_stb (code, reg, doffset, inst->inst_basereg);
+							else if (size == 2)
+								ppc_sth (code, reg, doffset, inst->inst_basereg);
+							else
+								ppc_stw (code, reg, doffset, inst->inst_basereg);
+						} else if (chunk == 8) {
+							ppc_std (code, reg, doffset, inst->inst_basereg);
+						} else {
+							for (int byte = 0; byte < chunk; ++byte) {
+								ppc_srdi (code, ppc_r0, reg, (7 - byte) * 8);
+								ppc_stb (code, ppc_r0, doffset + byte, inst->inst_basereg);
+							}
+						}
+						soffset += chunk;
+						doffset += chunk;
+					}
+					if (ainfo->vtsize) {
+						ppc_ldr (code, ppc_r12, 0, ppc_sp);
+						code = emit_memcpy (code, size - soffset, inst->inst_basereg, doffset, ppc_r12, ainfo->offset + soffset);
+					}
+				} else
+#endif
+				{
 				for (cur_reg = 0; cur_reg < ainfo->vtregs; ++cur_reg) {
 #if __APPLE__
 					/*
@@ -5119,6 +5686,7 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 							inst->inst_basereg, doffset,
 							ppc_r12, ainfo->offset + soffset);
 					}
+				}
 				}
 			} else if (ainfo->regtype == RegTypeStructByAddr) {
 				/* if it was originally a RegTypeBase */
@@ -5210,6 +5778,19 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 	
 	code = realloc_code (cfg, max_epilog_size);
 
+#ifdef MONO_ARCH_XSDK
+	if (is_xsdk_native_method (method) && mini_type_is_vtype (method->signature->ret) && !xsdk_return_in_registers (xsdk_native_size (method->signature->ret))) {
+		MonoInst *vret = cfg->vret_addr;
+
+		if (ppc_is_imm16 (vret->inst_offset))
+			ppc_ldptr (code, ppc_r3, vret->inst_offset, vret->inst_basereg);
+		else {
+			ppc_load (code, ppc_r12, vret->inst_offset);
+			ppc_ldptr_indexed (code, ppc_r3, vret->inst_basereg, ppc_r12);
+		}
+	}
+#endif
+
 	pos = 0;
 
 	if (method->save_lmf) {
@@ -5229,7 +5810,10 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 		 * we didn't actually change them (idea from Zoltan).
 		 */
 		/* restore iregs */
-		ppc_ldr_multiple (code, ppc_r13, G_STRUCT_OFFSET(MonoLMF, iregs), ppc_r12);
+		for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
+			mono_ppc_restore_reg (code, i, G_STRUCT_OFFSET(MonoLMF, iregs) +
+				(i - MONO_PPC_FIRST_SAVED_GREG) * MONO_PPC_SAVED_REG_SIZE, ppc_r12);
+		}
 		/* restore fregs */
 		/*for (i = 14; i < 32; i++) {
 			ppc_lfd (code, i, G_STRUCT_OFFSET(MonoLMF, fregs) + ((i-14) * sizeof (gdouble)), ppc_r12);
@@ -5254,17 +5838,17 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 		}
 		if (ppc_is_imm16 (cfg->stack_usage)) {
 			int offset = cfg->stack_usage;
-			for (i = 13; i <= 31; i++) {
+			for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
 				if (cfg->used_int_regs & (1 << i))
-					offset -= sizeof (target_mgreg_t);
+					offset -= MONO_PPC_SAVED_REG_SIZE;
 			}
 			if (cfg->frame_reg != ppc_sp)
 				ppc_mr (code, ppc_r12, cfg->frame_reg);
 			/* note r31 (possibly the frame register) is restored last */
-			for (i = 13; i <= 31; i++) {
+			for (i = MONO_PPC_FIRST_SAVED_GREG; i <= 31; i++) {
 				if (cfg->used_int_regs & (1 << i)) {
-					ppc_ldr (code, i, offset, cfg->frame_reg);
-					offset += sizeof (target_mgreg_t);
+					mono_ppc_restore_reg (code, i, offset, cfg->frame_reg);
+					offset += MONO_PPC_SAVED_REG_SIZE;
 				}
 			}
 			if (cfg->frame_reg != ppc_sp)
@@ -5275,10 +5859,10 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 			ppc_load32 (code, ppc_r12, cfg->stack_usage);
 			if (cfg->used_int_regs) {
 				ppc_add (code, ppc_r12, cfg->frame_reg, ppc_r12);
-				for (i = 31; i >= 13; --i) {
+				for (i = 31; i >= MONO_PPC_FIRST_SAVED_GREG; --i) {
 					if (cfg->used_int_regs & (1 << i)) {
-						pos += sizeof (target_mgreg_t);
-						ppc_ldr (code, i, -pos, ppc_r12);
+						pos += MONO_PPC_SAVED_REG_SIZE;
+						mono_ppc_restore_reg (code, i, -pos, ppc_r12);
 					}
 				}
 				ppc_mr (code, ppc_sp, ppc_r12);
@@ -5865,12 +6449,16 @@ mono_arch_clear_breakpoint (MonoJitInfo *ji, guint8 *ip)
 gboolean
 mono_arch_is_breakpoint_event (void *info, void *sigctx)
 {
+#ifdef MONO_ARCH_XSDK
+	return FALSE;
+#else
 	siginfo_t* sinfo = (siginfo_t*) info;
 	/* Sometimes the address is off by 4 */
 	if (sinfo->si_addr >= bp_trigger_page && (guint8*)sinfo->si_addr <= (guint8*)bp_trigger_page + 128)
 		return TRUE;
 	else
 		return FALSE;
+#endif
 }
 
 /*
@@ -5919,12 +6507,16 @@ mono_arch_stop_single_stepping (void)
 gboolean
 mono_arch_is_single_step_event (void *info, void *sigctx)
 {
+#ifdef MONO_ARCH_XSDK
+	return FALSE;
+#else
 	siginfo_t* sinfo = (siginfo_t*) info;
 	/* Sometimes the address is off by 4 */
 	if (sinfo->si_addr >= ss_trigger_page && (guint8*)sinfo->si_addr <= (guint8*)ss_trigger_page + 128)
 		return TRUE;
 	else
 		return FALSE;
+#endif
 }
 
 /*
