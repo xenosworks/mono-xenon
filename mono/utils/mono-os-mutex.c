@@ -72,7 +72,11 @@ mono_os_cond_timedwait (mono_cond_t *cond, mono_mutex_t *mutex, guint32 timeout_
 		ts.tv_sec ++;
 	}
 
+#ifdef TARGET_XSDK
+	res = pthread_cond_clockwait (cond, mutex, CLOCK_MONOTONIC, &ts);
+#else
 	res = pthread_cond_timedwait (cond, mutex, &ts);
+#endif
 	if (G_UNLIKELY (res != 0 && res != ETIMEDOUT)) {
 		g_print ("cond: %p mutex: %p\n", *(gpointer*)cond, *(gpointer*)mutex);
 		g_error ("%s: pthread_cond_timedwait failed with \"%s\" (%d) %ld %ld %d", __func__, g_strerror (res), res, ts.tv_sec, ts.tv_nsec, timeout_ms);

@@ -59,6 +59,9 @@
 #include "utils/refcount.h"
 #include "icall-decl.h"
 #include "utils/mono-errno.h"
+#ifdef TARGET_XSDK
+#include "utils/mono-xsdk.h"
+#endif
 
 #define NANOSECONDS_PER_MICROSECOND 1000LL
 #define TICKS_PER_MICROSECOND 10L
@@ -1632,6 +1635,11 @@ console_read(FileHandle *filehandle, gpointer buffer, guint32 numbytes, guint32 
 		mono_w32error_set_last (ERROR_ACCESS_DENIED);
 		return(FALSE);
 	}
+
+#ifdef TARGET_XSDK
+	if (((MonoFDHandle*) filehandle)->fd == 0)
+		return TRUE;
+#endif
 	
 	do {
 		MONO_ENTER_GC_SAFE;
@@ -1669,6 +1677,7 @@ console_write (FileHandle *filehandle, gpointer buffer, guint32 numbytes, guint3
 		mono_w32error_set_last (ERROR_ACCESS_DENIED);
 		return(FALSE);
 	}
+
 	
 	do {
 		MONO_ENTER_GC_SAFE;
@@ -2686,6 +2695,9 @@ _wapi_stdhandle_create (gint fd, const gchar *name)
 
 	mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_IO_LAYER_FILE, "%s: creating standard handle type %s, fd %d", __func__, name, fd);
 
+#ifdef TARGET_XSDK
+	flags = fd == 0 ? O_RDONLY : O_WRONLY;
+#else
 	/* Check if fd is valid */
 	do {
 		flags = fcntl(fd, F_GETFL);
@@ -2700,6 +2712,7 @@ _wapi_stdhandle_create (gint fd, const gchar *name)
 		mono_w32error_set_last (mono_w32error_unix_to_win32 (errno));
 		return INVALID_HANDLE_VALUE;
 	}
+#endif
 
 	filehandle = file_data_create (MONO_FDTYPE_CONSOLE, fd);
 	filehandle->filename = g_strdup(name);
@@ -3739,16 +3752,32 @@ mono_w32file_get_cwd (guint32 length, gunichar2 *buffer)
 	gunichar2 *utf16_path;
 	glong count;
 	gsize bytes;
+	gchar *cwd = (gchar*)buffer;
+	guint32 root = 0;
 
-	if (getcwd ((gchar*)buffer, length) == NULL) {
-		if (errno == ERANGE) { /*buffer length is not big enough */ 
+#ifdef HOST_XSDK
+	/*
+	 * xsdk's current directory is a drive's, "game:/", which the class libraries' Unix path rules (Path.IsPathRooted,
+	 * PathInternal.GetRootLength) don't take as rooted, so full paths built on it go wrong. Under "/", from which
+	 * xsdk's paths start a drive's name over (xsdk:src/path.c), it's rooted and the same folder: "/game:/".
+	 */
+	root = 1;
+	if (length > 0) {
+		cwd [0] = '/';
+		cwd++;
+		length--;
+	}
+#endif
+	if (getcwd (cwd, length) == NULL) {
+		/* A buffer too small, or of no bytes, which xsdk's getcwd refuses with EINVAL */
+		if (errno == ERANGE || (root && length == 0)) {
 			gchar *path = g_get_current_dir (); /*FIXME g_get_current_dir doesn't work with broken paths and calling it just to know the path length is silly*/
 			if (path == NULL)
 				return 0;
 			utf16_path = mono_unicode_from_external (path, &bytes);
 			g_free (utf16_path);
 			g_free (path);
-			return (bytes/2)+1;
+			return (bytes/2)+1+root;
 		}
 		_wapi_set_last_error_from_errno ();
 		return 0;
@@ -3808,9 +3837,15 @@ mono_w32file_create_pipe (gpointer *readpipe, gpointer *writepipe, guint32 size)
 	
 	mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_IO_LAYER_FILE, "%s: Creating pipe", __func__);
 
+#ifdef HOST_XSDK
+	/* xsdk has no pipes: no other process to talk to. */
+	errno = ENOSYS;
+	ret = -1;
+#else
 	MONO_ENTER_GC_SAFE;
 	ret=pipe (filedes);
 	MONO_EXIT_GC_SAFE;
+#endif
 	if (ret==-1) {
 		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_IO_LAYER_FILE, "%s: Error creating pipe: (%d) %s",
 			__func__, errno, g_strerror (errno));
@@ -4838,6 +4873,14 @@ mono_w32file_get_file_system_type (const gunichar2 *path, gunichar2 *fsbuffer, g
 	}
 	g_free (utfpath);
 	return status;
+}
+#endif
+
+#ifdef TARGET_XSDK
+gboolean
+mono_w32file_get_file_system_type (const gunichar2 *path, gunichar2 *fsbuffer, gint fsbuffersize)
+{
+	return FALSE;
 }
 #endif
 

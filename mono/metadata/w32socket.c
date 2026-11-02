@@ -71,6 +71,13 @@
 #include <mono/metadata/w32socket-internals.h>
 #include <mono/metadata/w32error.h>
 
+#ifdef HOST_XSDK
+#undef HAVE_STRUCT_SOCKADDR_IN6
+#define NI_MAXHOST 256
+/* XNet names no host for the console, so Dns.GetHostName fails as gethostname would. */
+#define gethostname(name, size) (errno = ENOSYS, -1)
+#endif
+
 #include <time.h>
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
@@ -254,7 +261,11 @@ convert_family (MonoAddressFamily mono_family)
 	case AddressFamily_Unspecified:
 		return AF_UNSPEC;
 	case AddressFamily_Unix:
+#ifdef AF_UNIX
 		return AF_UNIX;
+#else
+		return -1;
+#endif
 	case AddressFamily_InterNetwork:
 		return AF_INET;
 	case AddressFamily_AppleTalk:
@@ -305,8 +316,10 @@ convert_to_mono_family (guint16 af_family)
 	switch (af_family) {
 	case AF_UNSPEC:
 		return AddressFamily_Unspecified;
+#ifdef AF_UNIX
 	case AF_UNIX:
 		return AddressFamily_Unix;
+#endif
 	case AF_INET:
 		return AddressFamily_InterNetwork;
 #ifdef AF_IPX
@@ -348,7 +361,11 @@ convert_type (MonoSocketType mono_type)
 	case SocketType_Dgram:
 		return SOCK_DGRAM;
 	case SocketType_Raw:
+#ifdef SOCK_RAW
 		return SOCK_RAW;
+#else
+		return -1;
+#endif
 	case SocketType_Rdm:
 #ifdef SOCK_RDM
 		return SOCK_RDM;
@@ -421,8 +438,10 @@ convert_socketflags (gint32 sflags)
 #endif
 	if (sflags & SocketFlags_Peek)
 		flags |= MSG_PEEK;
+#ifdef MSG_DONTROUTE
 	if (sflags & SocketFlags_DontRoute)
 		flags |= MSG_DONTROUTE;
+#endif
 
 	/* Ignore Partial - see bug 349688.  Don't return -1, because
 	 * according to the comment in that bug ms runtime doesn't for
@@ -500,12 +519,16 @@ convert_sockopt_level_and_name (MonoSocketOptionLevel mono_level, MonoSocketOpti
 		case SocketOptionName_ReceiveBuffer:
 			*system_name = SO_RCVBUF;
 			break;
+#ifdef SO_SNDLOWAT
 		case SocketOptionName_SendLowWater:
 			*system_name = SO_SNDLOWAT;
 			break;
+#endif
+#ifdef SO_RCVLOWAT
 		case SocketOptionName_ReceiveLowWater:
 			*system_name = SO_RCVLOWAT;
 			break;
+#endif
 		case SocketOptionName_SendTimeout:
 			*system_name = SO_SNDTIMEO;
 			break;
@@ -571,21 +594,31 @@ convert_sockopt_level_and_name (MonoSocketOptionLevel mono_level, MonoSocketOpti
 			*system_name = IP_TTL;
 			break;
 #endif
+#ifdef IP_MULTICAST_IF
 		case SocketOptionName_MulticastInterface:
 			*system_name = IP_MULTICAST_IF;
 			break;
+#endif
+#ifdef IP_MULTICAST_TTL
 		case SocketOptionName_MulticastTimeToLive:
 			*system_name = IP_MULTICAST_TTL;
 			break;
+#endif
+#ifdef IP_MULTICAST_LOOP
 		case SocketOptionName_MulticastLoopback:
 			*system_name = IP_MULTICAST_LOOP;
 			break;
+#endif
+#ifdef IP_ADD_MEMBERSHIP
 		case SocketOptionName_AddMembership:
 			*system_name = IP_ADD_MEMBERSHIP;
 			break;
+#endif
+#ifdef IP_DROP_MEMBERSHIP
 		case SocketOptionName_DropMembership:
 			*system_name = IP_DROP_MEMBERSHIP;
 			break;
+#endif
 #ifdef HAVE_IP_PKTINFO
 		case SocketOptionName_PacketInformation:
 			*system_name = IP_PKTINFO;
@@ -617,6 +650,7 @@ convert_sockopt_level_and_name (MonoSocketOptionLevel mono_level, MonoSocketOpti
 		}
 		break;
 
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
 	case SocketOptionLevel_IPv6:
 		*system_level = mono_networking_get_ipv6_protocol ();
 
@@ -668,6 +702,7 @@ convert_sockopt_level_and_name (MonoSocketOptionLevel mono_level, MonoSocketOpti
 			return -1;
 		}
 		break;	/* SocketOptionLevel_IPv6 */
+#endif
 		
 	case SocketOptionLevel_Tcp:
 		*system_level = mono_networking_get_tcp_protocol ();
@@ -2255,9 +2290,11 @@ ves_icall_System_Net_Sockets_Socket_IOControl_icall (gsize sock, gint32 code, Mo
 	error_init (error);
 	*werror = 0;
 	
+#ifdef FIONBIO
 	if ((guint32)code == FIONBIO)
 		/* Invalid command. Must use Socket.Blocking */
 		return -1;
+#endif
 
 	if (MONO_HANDLE_IS_NULL (input)) {
 		i_buffer = NULL;
@@ -2309,15 +2346,17 @@ addrinfo_add_local_ips (MonoDomain *domain, MonoArrayHandleOut h_addr_list, Mono
 	HANDLE_FUNCTION_ENTER ();
 	struct in_addr *local_in = NULL;
 	int nlocal_in = 0;
-	struct in6_addr *local_in6 = NULL;
+	gpointer local_in6 = NULL;
 	int nlocal_in6 = 0;
 	int addr_index = 0;
 
 	error_init (error);
 	local_in = (struct in_addr *) mono_get_local_interfaces (AF_INET, &nlocal_in);
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
 	local_in6 = (struct in6_addr *) mono_get_local_interfaces (AF_INET6, &nlocal_in6);
+#endif
 	if (nlocal_in || nlocal_in6) {
-		char addr [INET6_ADDRSTRLEN];
+		char addr [46];
 		MONO_HANDLE_ASSIGN (h_addr_list,  mono_array_new_handle (domain, mono_get_string_class (), nlocal_in + nlocal_in6, error));
 		goto_if_nok (error, leave);
 			
@@ -2377,7 +2416,11 @@ addrinfo_to_IPHostEntry_handles (MonoAddressInfo *info, MonoStringHandleOut h_na
 	gint32 count;
 	count = 0;
 	for (ai = info->entries; ai != NULL; ai = ai->next) {
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
 		if (ai->family != AF_INET && ai->family != AF_INET6)
+#else
+		if (ai->family != AF_INET)
+#endif
 			continue;
 		count++;
 	}
@@ -2391,9 +2434,13 @@ addrinfo_to_IPHostEntry_handles (MonoAddressInfo *info, MonoStringHandleOut h_na
 	name_assigned = FALSE;
 	for (ai = info->entries; ai != NULL; ai = ai->next) {
 		MonoAddress maddr;
-		char buffer [INET6_ADDRSTRLEN]; /* Max. size for IPv6 */
+		char buffer [46]; /* Max. size for IPv6 */
 
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
 		if ((ai->family != PF_INET) && (ai->family != PF_INET6))
+#else
+		if (ai->family != PF_INET)
+#endif
 			continue;
 
 		mono_address_init (&maddr, ai->family, &ai->address);
@@ -2469,6 +2516,9 @@ ves_icall_System_Net_Dns_GetHostByName (MonoStringHandle host, MonoStringHandleO
 MonoBoolean
 ves_icall_System_Net_Dns_GetHostByAddr (MonoStringHandle addr, MonoStringHandleOut h_name, MonoArrayHandleOut h_aliases, MonoArrayHandleOut h_addr_list, gint32 hint, MonoError *error)
 {
+#ifdef HOST_XSDK
+	return FALSE;
+#else
 	char *address;
 	struct sockaddr_in saddr;
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
@@ -2534,6 +2584,7 @@ ves_icall_System_Net_Dns_GetHostByAddr (MonoStringHandle addr, MonoStringHandleO
 
 	MonoBoolean result = addrinfo_to_IPHostEntry_handles (info, h_name, h_aliases, h_addr_list, FALSE, error);
 	return result;
+#endif
 }
 
 MonoBoolean

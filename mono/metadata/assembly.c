@@ -43,6 +43,9 @@
 #include <mono/metadata/coree.h>
 #include <mono/metadata/cil-coff.h>
 #include <mono/utils/mono-io-portability.h>
+#ifdef HOST_XSDK
+#include <mono/utils/mono-xsdk.h>
+#endif
 #include <mono/utils/atomic.h>
 #include <mono/utils/mono-os-mutex.h>
 #include <mono/metadata/mono-private-unstable.h>
@@ -4652,6 +4655,13 @@ mono_assembly_load_full_gac_base_default (MonoAssemblyName *aname,
 		} else {
 			filename = g_strconcat (aname->name, ext, (const char*)NULL);
 		}
+#ifdef HOST_XSDK
+		if (strlen (filename) > MONO_XSDK_FILE_NAME_MAX) {
+			char *shortened = mono_xsdk_short_file_name (filename);
+			g_free (filename);
+			filename = shortened;
+		}
+#endif
 
 #ifndef DISABLE_GAC
 		const gboolean refonly = asmctx == MONO_ASMCTX_REFONLY;

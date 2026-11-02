@@ -77,8 +77,13 @@ mono_get_address_info (const char *hostname, int port, int flags, MonoAddressInf
 	hints.ai_family = PF_UNSPEC;
 	if (flags & MONO_HINT_IPV4)
 		hints.ai_family = PF_INET;
-	else if (flags & MONO_HINT_IPV6)
+	else if (flags & MONO_HINT_IPV6) {
+#ifdef PF_INET6
 		hints.ai_family = PF_INET6;
+#else
+		return 1;
+#endif
+	}
 
 	hints.ai_socktype = SOCK_STREAM;
 
@@ -154,6 +159,19 @@ fetch_protocol (const char *proto_name, int *cache, int *proto, int default_val)
 
 		getprotobyname_r (proto_name, &protoent_buf, buf, 1024, &pent);
 		*proto = pent ? pent->p_proto : default_val;
+		*cache = 1;
+	}
+	return *proto;
+}
+
+#elif defined(TARGET_XSDK)
+
+static int
+fetch_protocol (const char *proto_name, int *cache, int *proto, int default_val)
+{
+	(void)proto_name;
+	if (!*cache) {
+		*proto = default_val;
 		*cache = 1;
 	}
 	return *proto;

@@ -150,6 +150,10 @@ get_operations_for_jobs (MonoMList *list)
 static void
 selector_thread_wakeup (void)
 {
+#ifdef HOST_XSDK
+	/* No wakeup pipe: the selector's wait times out instead (threadpool-io-poll.c) and takes updates then. */
+	return;
+#endif
 	gchar msg = 'c';
 	gint written;
 
@@ -511,7 +515,11 @@ update_get_new (void)
 static void
 wakeup_pipes_init (void)
 {
-#if !defined(HOST_WIN32)
+#if defined(HOST_XSDK)
+	/* xsdk's poll waits on sockets alone (XNet's select), so a pipe couldn't wake it; nothing is ever ready on -1. */
+	threadpool_io->wakeup_pipes [0] = -1;
+	threadpool_io->wakeup_pipes [1] = -1;
+#elif !defined(HOST_WIN32)
 	if (pipe (threadpool_io->wakeup_pipes) == -1)
 		g_error ("wakeup_pipes_init: pipe () failed, error (%d) %s\n", errno, g_strerror (errno));
 	if (fcntl (threadpool_io->wakeup_pipes [0], F_SETFL, O_NONBLOCK) == -1)

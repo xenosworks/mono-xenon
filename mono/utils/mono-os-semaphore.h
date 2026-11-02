@@ -203,7 +203,11 @@ mono_os_sem_wait (MonoSemType *sem, MonoSemFlags flags)
 retry:
 	res = sem_wait (sem);
 	if (G_UNLIKELY (res != 0 && errno != EINTR))
+#ifdef TARGET_XSDK
+		g_error ("%s: sem_wait failed with \"%s\" (%d), sem=%p handle=0x%08X value=%d", __func__, g_strerror (errno), errno, sem, sem->handle, sem->value);
+#else
 		g_error ("%s: sem_wait failed with \"%s\" (%d)", __func__, g_strerror (errno), errno);
+#endif
 
 	if (res != 0 && errno == EINTR && !(flags & MONO_SEM_FLAGS_ALERTABLE))
 		goto retry;

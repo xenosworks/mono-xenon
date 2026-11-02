@@ -358,6 +358,22 @@ mono_threadpool_worker_request (void)
 	mono_refcount_dec (&worker);
 }
 
+#ifdef HOST_XSDK
+/*
+ * No signal breaks a wait on xsdk (mono_threads_suspend_abort_syscall), so the park's semaphore takes an interrupt
+ * instead, as mono_thread_info_sleep's condition does: an abort posts it. The semaphore is every parked worker's, so
+ * a post can wake another worker than the one aborted; at shutdown, when each is aborted and waited for, it wakes all.
+ */
+static void
+worker_park_interrupt (gpointer data)
+{
+	gint32 posts = mono_runtime_is_shutting_down () ? MAX (mono_atomic_load_i32 (&worker.parked_threads_count), 1) : 1;
+
+	for (gint32 i = 0; i < posts; i++)
+		mono_coop_sem_post (&worker.parked_threads_sem);
+}
+#endif
+
 /* return TRUE if timeout, FALSE otherwise (worker unpark or interrupt) */
 static gboolean
 worker_park (void)
@@ -365,6 +381,7 @@ worker_park (void)
 	gboolean timeout = FALSE;
 	gboolean interrupted = FALSE;
 	gint32 old, new_;
+	MonoSemTimedwaitRet parked;
 
 	mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_THREADPOOL, "[%p] worker parking",
 		GUINT_TO_POINTER (MONO_NATIVE_THREAD_ID_TO_UINT (mono_native_thread_id_get ())));
@@ -384,7 +401,21 @@ worker_park (void)
 			new_ = old + 1;
 		} while (mono_atomic_cas_i32 (&worker.parked_threads_count, new_, old) != old);
 
-		switch (mono_coop_sem_timedwait (&worker.parked_threads_sem, rand_next (5 * 1000, 60 * 1000), MONO_SEM_FLAGS_ALERTABLE)) {
+#ifdef HOST_XSDK
+		mono_thread_info_install_interrupt (worker_park_interrupt, NULL, &interrupted);
+		if (interrupted) {
+			parked = MONO_SEM_TIMEDWAIT_RET_ALERTED;
+		} else {
+			parked = mono_coop_sem_timedwait (&worker.parked_threads_sem, rand_next (5 * 1000, 60 * 1000), MONO_SEM_FLAGS_ALERTABLE);
+			/* A post the interrupt made counts as the interrupt, not an unpark. */
+			mono_thread_info_uninstall_interrupt (&interrupted);
+			if (interrupted)
+				parked = MONO_SEM_TIMEDWAIT_RET_ALERTED;
+		}
+#else
+		parked = mono_coop_sem_timedwait (&worker.parked_threads_sem, rand_next (5 * 1000, 60 * 1000), MONO_SEM_FLAGS_ALERTABLE);
+#endif
+		switch (parked) {
 		case MONO_SEM_TIMEDWAIT_RET_SUCCESS:
 			break;
 		case MONO_SEM_TIMEDWAIT_RET_ALERTED:

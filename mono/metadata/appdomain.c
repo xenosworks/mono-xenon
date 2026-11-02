@@ -74,6 +74,9 @@
 #include <mono/metadata/w32handle.h>
 #include <mono/metadata/w32error.h>
 #include <mono/utils/w32api.h>
+#ifdef HOST_XSDK
+#include <mono/utils/mono-xsdk.h>
+#endif
 
 #ifdef ENABLE_PERFTRACING
 #include <eventpipe/ds-server.h>

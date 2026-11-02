@@ -36,6 +36,9 @@
 #include <mono/utils/mono-threads.h>
 #include <mono/utils/atomic.h>
 #include <mono/utils/mono-counters.h>
+#ifdef TARGET_XSDK
+#include <mono/utils/mono-xsdk.h>
+#endif
 
 #define BEGIN_CRITICAL_SECTION do { \
 	MonoThreadInfo *__info = mono_thread_info_current_unchecked (); \
@@ -275,6 +278,17 @@ mono_valloc (void *addr, size_t length, int flags, MonoMemAccountType type)
 	if (!mono_valloc_can_alloc (length))
 		return NULL;
 
+#ifdef TARGET_XSDK
+	if (flags & MONO_MMAP_EXEC) {
+		if (addr)
+			return NULL;
+		ptr = mono_xsdk_jit_alloc (length);
+		if (ptr)
+			mono_account_mem (type, (ssize_t)length);
+		return ptr;
+	}
+#endif
+
 	/* translate the flags */
 	if (flags & MONO_MMAP_FIXED)
 		mflags |= MAP_FIXED;
@@ -346,6 +360,10 @@ mono_valloc (void *addr, size_t length, int flags, MonoMemAccountType type)
 int
 mono_vfree (void *addr, size_t length, MonoMemAccountType type)
 {
+#ifdef TARGET_XSDK
+	if (type == MONO_MEM_ACCOUNT_CODE)
+		return 0;
+#endif
 	int res;
 	BEGIN_CRITICAL_SECTION;
 	res = munmap (addr, length);
@@ -380,6 +398,14 @@ void*
 mono_file_map_error (size_t length, int flags, int fd, guint64 offset, void **ret_handle,
 	const char *filepath, char **error_message)
 {
+#ifdef TARGET_XSDK
+	void *mapped = mono_xsdk_file_map (length, flags, fd, offset, ret_handle);
+	if (!mapped && error_message) {
+		*error_message = g_strdup_printf ("%s failed file:%s length:0x%" G_GSIZE_FORMAT "X offset:0x%" PRIu64 "X error:%s(0x%X)\n",
+			__func__, filepath ? filepath : "", length, (guint64)offset, g_strerror (errno), errno);
+	}
+	return mapped;
+#endif
 	void *ptr;
 	int mflags = 0;
 	int prot = prot_from_flags (flags);
@@ -429,6 +455,9 @@ mono_file_map_error (size_t length, int flags, int fd, guint64 offset, void **re
 int
 mono_file_unmap (void *addr, void *handle)
 {
+#ifdef TARGET_XSDK
+	return mono_xsdk_file_unmap (addr, handle);
+#endif
 	int res;
 
 	// No GC safe transition because this is called early in driver.c via mono_debug_init (with a few layers of indirection)
@@ -455,6 +484,10 @@ mono_file_unmap (void *addr, void *handle)
 int
 mono_mprotect (void *addr, size_t length, int flags)
 {
+#ifdef TARGET_XSDK
+	if (flags & MONO_MMAP_EXEC)
+		return 0;
+#endif
 	int prot = prot_from_flags (flags);
 
 	if (flags & MONO_MMAP_DISCARD) {
@@ -469,7 +502,7 @@ mono_mprotect (void *addr, size_t length, int flags)
 		madvise (addr, length, MADV_DONTNEED);
 		madvise (addr, length, MADV_FREE);
 #else
-		posix_madvise (addr, length, POSIX_MADV_DONTNEED);
+		(void)0;
 #endif
 #endif
 	}

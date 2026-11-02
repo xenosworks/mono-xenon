@@ -281,7 +281,12 @@ open_file_map (const char *c_path, int input_fd, int mode, gint64 *capacity, int
 	if (c_path) //FIXME use io portability?
 		fd = open (c_path, file_mode_to_unix (mode) | access_mode_to_unix (access), DEFAULT_FILEMODE);
 	else
+#ifdef HOST_XSDK
+		/* xsdk's descriptors can't be duplicated. */
+		fd = -1;
+#else
 		fd = dup (input_fd);
+#endif
 	MONO_EXIT_GC_SAFE;
 
 	if (fd == -1) { //XXX translate errno?

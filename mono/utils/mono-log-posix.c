@@ -10,11 +10,15 @@
  */
 #include <config.h>
 
+#include <glib.h>
+
+#include "mono-logger-internals.h"
+
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
 
-#if defined(_POSIX_VERSION) 
+#if defined(_POSIX_VERSION) && !defined(TARGET_XSDK)
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -97,5 +101,23 @@ mono_log_close_syslog()
 #ifdef HAVE_CLOSELOG
 	closelog();
 #endif
+}
+#endif
+
+#ifdef TARGET_XSDK
+void
+mono_log_open_syslog (const char *ident, void *userData)
+{
+}
+
+void
+mono_log_write_syslog (const char *domain, GLogLevelFlags level, mono_bool hdr, const char *message)
+{
+	g_print ("%s\n", message);
+}
+
+void
+mono_log_close_syslog (void)
+{
 }
 #endif

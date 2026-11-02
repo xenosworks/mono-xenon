@@ -8,6 +8,9 @@
  * Copyright (C) 2005-2009 Novell, Inc. (http://www.novell.com)
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
+#ifdef TARGET_XSDK
+#include "console-null.c"
+#else
 #include <config.h>
 #include <glib.h>
 #include <stdio.h>
@@ -509,4 +512,5 @@ ves_icall_System_ConsoleDriver_TtySetup (MonoStringHandle keypad, MonoStringHand
 
 	return TRUE;
 }
+#endif
 

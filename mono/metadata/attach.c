@@ -16,7 +16,7 @@
 #if defined(HOST_WIN32) && !defined(DISABLE_ATTACH)
 #define DISABLE_ATTACH
 #endif
-#ifndef DISABLE_ATTACH
+#if !defined(DISABLE_ATTACH) && !defined(TARGET_XSDK)
 
 #include <stdio.h>
 #include <stdlib.h>

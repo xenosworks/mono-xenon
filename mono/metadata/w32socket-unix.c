@@ -362,6 +362,7 @@ mono_w32socket_recvfrom (SOCKET sock, char *buf, int len, int flags, struct sock
 	return ret;
 }
 
+#ifndef HOST_XSDK
 static void
 wsabuf_to_msghdr (WSABUF *buffers, guint32 count, struct msghdr *hdr)
 {
@@ -438,6 +439,7 @@ mono_w32socket_recvbuffers (SOCKET sock, WSABUF *buffers, guint32 count, guint32
 	mono_fdhandle_unref ((MonoFDHandle*) sockethandle);
 	return 0;
 }
+#endif
 
 int
 mono_w32socket_send (SOCKET sock, void *buf, int len, int flags, gboolean blocking)
@@ -525,6 +527,7 @@ mono_w32socket_sendto (SOCKET sock, const char *buf, int len, int flags, const s
 	return ret;
 }
 
+#ifndef HOST_XSDK
 int
 mono_w32socket_sendbuffers (SOCKET sock, WSABUF *buffers, guint32 count, guint32 *sent, guint32 flags, gpointer overlapped, gpointer complete, gboolean blocking)
 {
@@ -571,6 +574,21 @@ mono_w32socket_sendbuffers (SOCKET sock, WSABUF *buffers, guint32 count, guint32
 	mono_fdhandle_unref ((MonoFDHandle*) sockethandle);
 	return 0;
 }
+#else
+int
+mono_w32socket_recvbuffers (SOCKET sock, WSABUF *buffers, guint32 count, guint32 *received, guint32 *flags, gpointer overlapped, gpointer complete, gboolean blocking)
+{
+	mono_w32socket_set_last_error (ERROR_NOT_SUPPORTED);
+	return SOCKET_ERROR;
+}
+
+int
+mono_w32socket_sendbuffers (SOCKET sock, WSABUF *buffers, guint32 count, guint32 *sent, guint32 flags, gpointer overlapped, gpointer complete, gboolean blocking)
+{
+	mono_w32socket_set_last_error (ERROR_NOT_SUPPORTED);
+	return SOCKET_ERROR;
+}
+#endif
 
 #define SF_BUFFER_SIZE	16384
 
@@ -691,12 +709,14 @@ retry_socket:
 	fd = socket (domain, type, protocol);
 	MONO_EXIT_GC_SAFE;
 	if (fd == -1) {
+#ifdef SOCK_RAW
 		if (domain == AF_INET && type == SOCK_RAW && protocol == 0) {
 			/* Retry with protocol == 4 (see bug #54565) */
 			// https://bugzilla.novell.com/show_bug.cgi?id=MONO54565
 			protocol = 4;
 			goto retry_socket;
 		}
+#endif
 
 		gint errnum = errno;
 		mono_trace (G_LOG_LEVEL_DEBUG, MONO_TRACE_IO_LAYER_SOCKET, "%s: socket error: %s", __func__, g_strerror (errno));
@@ -1094,11 +1114,17 @@ mono_w32socket_disconnect (SOCKET sock, gboolean reuse)
 	 * Environment: UNIX File I/O" dup2() is atomic so there
 	 * should not be a race condition between the old fd being
 	 * closed and the new socket fd being copied over */
+#ifdef HOST_XSDK
+	/* xsdk's descriptors can't be duplicated, so a disconnected socket can't be reused in place. */
+	errno = ENOTSUP;
+	ret = -1;
+#else
 	do {
 		MONO_ENTER_GC_SAFE;
 		ret = dup2 (newsock, ((MonoFDHandle*) sockethandle)->fd);
 		MONO_EXIT_GC_SAFE;
 	} while (ret == -1 && errno == EAGAIN);
+#endif
 
 	if (ret == -1) {
 		gint errnum = errno;
@@ -1267,6 +1293,11 @@ mono_w32socket_ioctl (SOCKET sock, gint32 command, gchar *input, gint inputlen, 
 		return 0;
 	}
 
+#ifdef HOST_XSDK
+	mono_w32socket_set_last_error (ERROR_NOT_SUPPORTED);
+	mono_fdhandle_unref ((MonoFDHandle*) sockethandle);
+	return SOCKET_ERROR;
+#else
 	buffer = inputlen > 0 ? (gchar*) g_memdup (input, inputlen) : NULL;
 
 	MONO_ENTER_GC_SAFE;
@@ -1302,6 +1333,7 @@ mono_w32socket_ioctl (SOCKET sock, gint32 command, gchar *input, gint inputlen, 
 
 	mono_fdhandle_unref ((MonoFDHandle*) sockethandle);
 	return 0;
+#endif
 }
 
 gboolean
@@ -1369,6 +1401,10 @@ mono_w32socket_set_blocking (SOCKET sock, gboolean blocking)
 gint
 mono_w32socket_get_available (SOCKET sock, guint64 *amount)
 {
+#ifdef HOST_XSDK
+	mono_w32socket_set_last_error (ERROR_NOT_SUPPORTED);
+	return SOCKET_ERROR;
+#else
 	SocketHandle *sockethandle;
 	gint ret;
 
@@ -1420,6 +1456,7 @@ mono_w32socket_get_available (SOCKET sock, guint64 *amount)
 
 	mono_fdhandle_unref ((MonoFDHandle*) sockethandle);
 	return 0;
+#endif
 }
 
 void

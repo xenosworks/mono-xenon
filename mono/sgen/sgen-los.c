@@ -23,7 +23,12 @@
 
 #ifdef HAVE_SGEN_GC
 
+#include <stdint.h>
 #include <string.h>
+
+#if defined(TARGET_XSDK) && !defined(SSIZE_MAX)
+#define SSIZE_MAX INTPTR_MAX
+#endif
 
 #include "mono/sgen/sgen-gc.h"
 #include "mono/sgen/sgen-protocol.h"

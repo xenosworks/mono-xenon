@@ -25,6 +25,11 @@
 #include "icall-decl.h"
 
 
+#ifdef HOST_XSDK
+/* The console has no users: a title runs as root would, with nobody else to be. */
+#define geteuid() ((uid_t)0)
+#endif
+
 #ifndef HOST_WIN32
 #ifdef HAVE_GRP_H
 #include <grp.h>

@@ -33,6 +33,15 @@
 #include <glib.h>
 #include <gmodule.h>
 
+#ifdef TARGET_XSDK
+gboolean
+g_module_address (void *addr, char *file_name, size_t file_name_len,
+	void **file_base, char *sym_name, size_t sym_name_len, void **sym_addr)
+{
+	return FALSE;
+}
+#endif
+
 #if defined(G_OS_UNIX) && defined(HAVE_DLFCN_H)
 #include <dlfcn.h>
 

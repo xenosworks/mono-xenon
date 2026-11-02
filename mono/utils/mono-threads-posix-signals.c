@@ -13,7 +13,7 @@
 
 #include "mono-threads.h"
 
-#if defined(USE_POSIX_BACKEND)
+#if defined(USE_POSIX_BACKEND) && !defined(TARGET_XSDK)
 
 #include <errno.h>
 #include <mono/utils/mono-errno.h>

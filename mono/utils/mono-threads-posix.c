@@ -147,7 +147,7 @@ mono_thread_info_get_system_max_stack_size (void)
 	return INT_MAX;
 }
 
-#else
+#elif !defined(TARGET_XSDK)
 int
 mono_thread_info_get_system_max_stack_size (void)
 {
@@ -427,6 +427,11 @@ mono_threads_suspend_begin_async_resume (MonoThreadInfo *info)
 void
 mono_threads_suspend_abort_syscall (MonoThreadInfo *info)
 {
+#ifdef HOST_XSDK
+	/* The console has no signals to break a call with, so, as on WebAssembly (mono-threads-wasm.c), the thread is
+	 * interrupted when its call returns; the I/O selector's poll returns every 10 ms (threadpool-io-poll.c). */
+	return;
+#endif
 	/* We signal a thread to break it from the current syscall.
 	 * This signal should not be interpreted as a suspend request. */
 	info->syscall_break_signal = TRUE;

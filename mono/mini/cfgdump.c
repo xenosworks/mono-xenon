@@ -70,7 +70,10 @@ create_socket (const char *hostname, const int port)
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons (port);
-    serv_addr.sin_addr.s_addr = inet_addr (hostname);
+    if (inet_pton (AF_INET, hostname, &serv_addr.sin_addr) != 1) {
+		g_warning ("cfg_dump: invalid address: %s", hostname);
+		return -1;
+	}
 
     if (connect (sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         g_warning ("cfg_dump: Connect Failed: %s", strerror (errno));

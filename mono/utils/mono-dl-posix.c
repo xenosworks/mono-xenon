@@ -26,7 +26,11 @@
 #include <ctype.h>
 #include <string.h>
 #include <glib.h>
+#ifdef TARGET_XSDK
+#include <mono/utils/mono-xsdk.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #if !defined (TARGET_MACH)
 const char *
@@ -86,6 +90,11 @@ mono_dl_get_system_dir (void)
 void *
 mono_dl_open_file (const char *file, int flags)
 {
+#ifdef TARGET_XSDK
+	const char *module = file ? file : "__Internal";
+	/* The module's name stands for its handle; a copy, as callers free the names they probe with (mono-dl.c). */
+	return mono_xsdk_pinvoke_has_module (module) ? (void *)g_strdup (module) : NULL;
+#endif
 #ifdef HOST_ANDROID
 	/* Bionic doesn't support NULL filenames */
 	if (!file)
@@ -102,6 +111,7 @@ mono_dl_open_file (const char *file, int flags)
 	if (g_path_is_absolute (file) && !g_file_test (file, G_FILE_TEST_EXISTS))
 		return NULL;
 #endif
+#ifndef TARGET_XSDK
 #if defined(_AIX)
 	/*
 	 * dlopen is /weird/ on AIX 
@@ -115,23 +125,35 @@ mono_dl_open_file (const char *file, int flags)
 #else
 	return dlopen (file, flags);
 #endif
+#endif
 }
 
 void
 mono_dl_close_handle (MonoDl *module)
 {
+#ifdef TARGET_XSDK
+	g_free (module->handle);
+#else
 	dlclose (module->handle);
+#endif
 }
 
 void*
 mono_dl_lookup_symbol (MonoDl *module, const char *name)
 {
+#ifdef TARGET_XSDK
+	return mono_xsdk_pinvoke_lookup (module->main_module ? "__Internal" : (const char *)module->handle, name);
+#else
 	return dlsym (module->handle, name);
+#endif
 }
 
 int
 mono_dl_convert_flags (int mono_flags, int native_flags)
 {
+#ifdef TARGET_XSDK
+	return 0;
+#else
 	int lflags = native_flags;
 
 	lflags = mono_flags & MONO_DL_LOCAL ? RTLD_LOCAL : RTLD_GLOBAL;
@@ -142,12 +164,17 @@ mono_dl_convert_flags (int mono_flags, int native_flags)
 		lflags |= RTLD_NOW;
 
 	return lflags;
+#endif
 }
 
 char*
 mono_dl_current_error_string (void)
 {
+#ifdef TARGET_XSDK
+	return g_strdup ("No static P/Invoke registration matches this module or symbol");
+#else
 	return g_strdup (dlerror ());
+#endif
 }
 
 #else

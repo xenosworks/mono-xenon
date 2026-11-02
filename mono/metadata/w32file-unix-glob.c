@@ -80,6 +80,9 @@ typedef char Char;
 
 #endif
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #define	CHAR(c)		((gchar)((c)&M_ASCII))
 #define	META(c)		((gchar)((c)|M_QUOTE))

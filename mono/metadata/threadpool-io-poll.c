@@ -19,7 +19,12 @@ POLL_INIT_FD (mono_pollfd *poll_fd, gint fd, gint events)
 static gboolean
 poll_init (gint wakeup_pipe_fd)
 {
+#ifdef HOST_XSDK
+	/* No wakeup pipe (threadpool-io.c): poll skips the -1, and the wait times out instead (poll_event_wait). */
+	g_assert (wakeup_pipe_fd == -1);
+#else
 	g_assert (wakeup_pipe_fd >= 0);
+#endif
 
 	poll_fds_size = 1;
 	poll_fds_capacity = 64;
@@ -150,7 +155,12 @@ poll_event_wait (void (*callback) (gint fd, gint events, gpointer user_data), gp
 	mono_thread_info_set_flags (MONO_THREAD_INFO_FLAGS_NO_GC);
 
 	MONO_ENTER_GC_SAFE;
+#ifdef HOST_XSDK
+	/* Without a wakeup pipe (threadpool-io.c), new and removed sockets wait for this timeout. */
+	ready = mono_poll (poll_fds, poll_fds_size, 10);
+#else
 	ready = mono_poll (poll_fds, poll_fds_size, -1);
+#endif
 	MONO_EXIT_GC_SAFE;
 
 	mono_thread_info_set_flags (MONO_THREAD_INFO_FLAGS_NONE);

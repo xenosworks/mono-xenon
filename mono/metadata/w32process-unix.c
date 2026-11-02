@@ -1172,9 +1172,15 @@ mono_w32process_signal_finished (void)
 		int status = -1;
 		int pid;
 
+#ifdef HOST_XSDK
+		/* A title can't start processes, so there's never a child to wait for. */
+		pid = -1;
+		errno = ECHILD;
+#else
 		do {
 			pid = waitpid (process->pid, &status, WNOHANG);
 		} while (pid == -1 && errno == EINTR);
+#endif
 
 		// possible values of 'pid':
 		//  process->pid : the status changed for this child

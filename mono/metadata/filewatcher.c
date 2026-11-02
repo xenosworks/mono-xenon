@@ -32,6 +32,10 @@
 #include <mono/utils/mono-io-portability.h>
 #include <mono/metadata/w32error.h>
 
+#if defined(HOST_XSDK) && !defined(PATH_MAX)
+#define PATH_MAX 260
+#endif
+
 #ifdef HOST_WIN32
 
 /*
