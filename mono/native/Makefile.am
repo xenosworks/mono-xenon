@@ -2,7 +2,12 @@ if !ENABLE_MSVC_ONLY
 if MONO_NATIVE_COMPAT
 lib_LTLIBRARIES = libmono-native-compat.la libmono-native-unified.la
 else
+if MONO_NATIVE_PLATFORM_XSDK
+# Taken into libmonosgen-2.0 (mini/Makefile.am.in), which a title links alone.
+noinst_LTLIBRARIES = libmono-native.la
+else
 lib_LTLIBRARIES = libmono-native.la
+endif
 endif
 endif # !ENABLE_MSVC_ONLY
 
@@ -26,12 +31,8 @@ common_sources = \
 	../../external/corefx/src/Native/Unix/Common/pal_utilities.h \
 	../../external/corefx/src/Native/Unix/System.Native/pal_errno.c \
 	../../external/corefx/src/Native/Unix/System.Native/pal_errno.h \
-	../../external/corefx/src/Native/Unix/System.Native/pal_maphardwaretype.c \
-	../../external/corefx/src/Native/Unix/System.Native/pal_maphardwaretype.h \
 	../../external/corefx/src/Native/Unix/System.Native/pal_memory.c \
 	../../external/corefx/src/Native/Unix/System.Native/pal_memory.h \
-	../../external/corefx/src/Native/Unix/System.Native/pal_uid.c \
-	../../external/corefx/src/Native/Unix/System.Native/pal_uid.h \
 	../../external/corefx/src/Native/Unix/System.Native/pal_time.c \
 	../../external/corefx/src/Native/Unix/System.Native/pal_time.h \
 	../../external/corefx/src/Native/AnyOS/brotli/enc/backward_references.c \
@@ -63,6 +64,26 @@ common_sources = \
 	../../external/corefx/src/Native/AnyOS/brotli/common/dictionary.c \
 	../../external/corefx/src/Native/AnyOS/brotli/common/platform.c \
 	../../external/corefx/src/Native/AnyOS/brotli/common/transform.c
+
+# Needing link-layer addresses and a user database, which xsdk lacks.
+posix_sources = \
+	../../external/corefx/src/Native/Unix/System.Native/pal_maphardwaretype.c \
+	../../external/corefx/src/Native/Unix/System.Native/pal_maphardwaretype.h \
+	../../external/corefx/src/Native/Unix/System.Native/pal_uid.c \
+	../../external/corefx/src/Native/Unix/System.Native/pal_uid.h
+
+if !MONO_NATIVE_PLATFORM_XSDK
+common_sources += $(posix_sources)
+endif
+
+# pal-xsdk-table.c is written by xsdk/native_table.py from these sources.
+xsdk_sources = \
+	pal-xsdk.c \
+	pal-xsdk-table.c \
+	../../external/corefx/src/Native/Unix/System.Native/pal_io.c \
+	../../external/corefx/src/Native/Unix/System.Native/pal_io.h \
+	../../external/corefx/src/Native/Unix/System.Native/pal_random.c \
+	../../external/corefx/src/Native/Unix/System.Native/pal_random.h
 
 macos_sources = $(unix_sources)
 
@@ -126,7 +147,7 @@ ios_sources += $(gss_sources)
 android_sources += $(gss_sources)
 endif
 
-EXTRA_libmono_native_la_SOURCES = $(common_sources) $(macos_sources) $(ios_sources) $(linux_sources) $(aix_sources) $(freebsd_sources) $(netbsd_sources) $(haiku_sources) $(unix_sources) $(gss_sources)
+EXTRA_libmono_native_la_SOURCES = $(common_sources) $(macos_sources) $(ios_sources) $(linux_sources) $(aix_sources) $(freebsd_sources) $(netbsd_sources) $(haiku_sources) $(unix_sources) $(gss_sources) $(posix_sources) $(xsdk_sources)
 
 if MONO_NATIVE_PLATFORM_MACOS
 platform_sources = $(macos_sources)
@@ -151,6 +172,10 @@ platform_sources = $(netbsd_sources)
 else
 if MONO_NATIVE_PLATFORM_HAIKU
 platform_sources = $(haiku_sources)
+else
+if MONO_NATIVE_PLATFORM_XSDK
+platform_sources = $(xsdk_sources)
+endif
 endif
 endif
 endif

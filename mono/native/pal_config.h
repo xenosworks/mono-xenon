@@ -6,3 +6,19 @@
 #undef HAVE_CLOCK_MONOTONIC
 #undef HAVE_CLOCK_MONOTONIC_COARSE
 #endif
+
+#ifdef HOST_XSDK
+/* newlib has no ESHUTDOWN, which pal_errno.c maps; nothing on xsdk sets it, so a value of its own will do. */
+#define ESHUTDOWN 1000
+/* BSD's whiteout entry, which pal_io.c checks its own value against; FATX has none. */
+#define DT_WHT 14
+/* FATX has no symbolic links, so lstat is stat; newlib declares no lstat for this target. */
+#define lstat stat
+/* newlib implements getline as __getline and doesn't declare getline itself. */
+#define getline __getline
+/* The PAL is compiled with _GNU_SOURCE here (configure.ac), which gives newlib's GNU strerror_r. */
+#define HAVE_GNU_STRERROR_R 1
+/* What the console has no use for, in pal-xsdk.c; renamed so that newlib's own prototypes declare them. */
+#define pipe mono_xsdk_pal_pipe
+#define flock mono_xsdk_pal_flock
+#endif
